@@ -116,6 +116,8 @@ export class Room {
     this.preview = null; // {defs, defsHash, order: [tid], pages: Map<tid, {tid, w, h, svg}>}
     this.images = new Map(); // hash -> {mime, data}: images referenced by previews
     this.glyphs = new Map(); // id -> <symbol> markup shared by all pages (engine only)
+    this.outline = null; // headings of the last successful compile (engine only)
+    this.outlineJson = null;
     this.pendingAuthors = new Set();
     this.changedSinceSnapshot = false;
     this.versionCache = new Map(); // vid -> full preview
@@ -174,7 +176,7 @@ export class Room {
     ws.on('message', (data, isBinary) => {
       if (!isBinary) {
         // A client that lost track of the preview asks for all of it again.
-        if (data.toString() === 'resync' && this.last) send(ws, JSON.stringify({ ...this.last, preview: this.fullPreview() }));
+        if (data.toString() === 'resync' && this.last) send(ws, JSON.stringify(this.fullMessage()));
         return;
       }
       try {
@@ -199,7 +201,7 @@ export class Room {
     }
 
     send(ws, JSON.stringify({ type: 'meta', meta: this.meta }));
-    if (this.last) send(ws, JSON.stringify({ ...this.last, preview: this.fullPreview() }));
+    if (this.last) send(ws, JSON.stringify(this.fullMessage()));
   }
 
   onMessage(ws, data) {
@@ -480,6 +482,11 @@ export class Room {
     }
   }
 
+  /** Everything a newly connected client needs: last compile, outline, full preview. */
+  fullMessage() {
+    return { ...this.last, outline: this.outline ?? undefined, preview: this.fullPreview() };
+  }
+
   /** The whole current preview, for clients that have nothing yet. */
   fullPreview() {
     if (!this.preview) return null;
@@ -561,8 +568,21 @@ export class Room {
         at: Date.now(),
       };
       this.last = msg;
-      const preview = res.preview ? this.applyPreview(res.preview) : null;
-      this.broadcastJSON(preview ? { ...msg, preview } : msg);
+      const out = { ...msg };
+      if (res.preview) {
+        const preview = this.applyPreview(res.preview);
+        if (preview) out.preview = preview;
+      }
+      // The heading list only goes out when it changed.
+      if (res.outline) {
+        const json = JSON.stringify(res.outline);
+        if (json !== this.outlineJson) {
+          this.outline = res.outline;
+          this.outlineJson = json;
+          out.outline = res.outline;
+        }
+      }
+      this.broadcastJSON(out);
     } catch (e) {
       console.error(`[room ${this.id}] compile failed:`, e);
     } finally {

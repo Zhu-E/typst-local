@@ -95,8 +95,29 @@ struct Response {
     pages: Option<Vec<PageOut>>,
     #[serde(rename = "numPages", skip_serializing_if = "Option::is_none")]
     num_pages: Option<usize>,
+    /// Every heading in the document, in order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outline: Option<Vec<Heading>>,
     pdf: bool,
     ms: u64,
+}
+
+#[derive(Serialize)]
+struct Heading {
+    level: usize,
+    title: String,
+    /// Rendered number like "2.1", if the heading is numbered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    number: Option<String>,
+    /// Whether it would appear in an #outline().
+    outlined: bool,
+    page: usize,
+    x: f64,
+    y: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<Position>,
 }
 
 #[derive(Serialize)]
@@ -372,6 +393,7 @@ fn error_response(id: u64, message: String) -> Response {
         diagnostics: vec![Diagnostic { message, severity: "error", path: None, package: None, range: None, hints: vec![] }],
         pages: None,
         num_pages: None,
+        outline: None,
         pdf: false,
         ms: 0,
     }
@@ -495,6 +517,42 @@ fn cursor_position(project: &Project, id: u64, path: &str, offset_utf16: usize) 
     }
 }
 
+// ---- outline ----------------------------------------------------------------
+
+fn outline(project: &Project, doc: &PagedDocument) -> Vec<Heading> {
+    use typst::foundations::{NativeElement, StyleChain};
+    use typst::model::HeadingElem;
+    let styles = StyleChain::default();
+    doc.introspector
+        .query(&HeadingElem::ELEM.select())
+        .iter()
+        .filter_map(|content| {
+            let heading = content.to_packed::<HeadingElem>()?;
+            let at = doc.introspector.position(content.location()?);
+            // Prefer where the heading's text was written (e.g. a `title: [...]`
+            // passed into a template) over where the template builds the heading.
+            let in_project = |s: Span| s.id().is_some_and(|id| id.package().is_none());
+            let span = [heading.body.span(), content.span()].into_iter().find(|s| in_project(*s)).unwrap_or(content.span());
+            let file = span.id().filter(|id| id.package().is_none());
+            let position = file.and_then(|id| {
+                let source = project.source(id).ok()?;
+                position(&source, project.range(span)?.start)
+            });
+            Some(Heading {
+                level: heading.resolve_level(styles).get(),
+                title: heading.body.plain_text().trim().to_string(),
+                number: heading.numbers.as_ref().map(|n| n.to_string()).filter(|n| !n.is_empty()),
+                outlined: heading.outlined.get(styles),
+                page: at.page.get() - 1,
+                x: at.point.x.to_pt(),
+                y: at.point.y.to_pt(),
+                path: file.map(|id| id.vpath().as_rootless_path().to_string_lossy().replace('\\', "/")),
+                position,
+            })
+        })
+        .collect()
+}
+
 // ---- compiling --------------------------------------------------------------
 
 fn compile(project: &mut Project, req: CompileRequest) -> Response {
@@ -533,6 +591,7 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
                 diagnostics: all,
                 pages: None,
                 num_pages: None,
+                outline: None,
                 pdf: false,
                 ms: start.elapsed().as_millis() as u64,
             };
@@ -549,10 +608,10 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
                 })
             });
         return match written {
-            Ok(()) => Response { id: req.id, status, diagnostics, pages: None, num_pages: Some(doc.pages.len()), pdf: true, ms: start.elapsed().as_millis() as u64 },
+            Ok(()) => Response { id: req.id, status, diagnostics, pages: None, num_pages: Some(doc.pages.len()), outline: None, pdf: true, ms: start.elapsed().as_millis() as u64 },
             Err(mut errs) => {
                 errs.append(&mut diagnostics);
-                Response { id: req.id, status: "error", diagnostics: errs, pages: None, num_pages: None, pdf: false, ms: start.elapsed().as_millis() as u64 }
+                Response { id: req.id, status: "error", diagnostics: errs, pages: None, num_pages: None, outline: None, pdf: false, ms: start.elapsed().as_millis() as u64 }
             }
         };
     }
@@ -581,6 +640,7 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
         .collect();
     project.rendered = hashes.into_iter().collect();
     let num_pages = doc.pages.len();
+    let outline = outline(project, &doc);
     project.document = Some(doc);
 
     Response {
@@ -589,6 +649,7 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
         diagnostics,
         pages: Some(pages),
         num_pages: Some(num_pages),
+        outline: Some(outline),
         pdf: false,
         ms: start.elapsed().as_millis() as u64,
     }

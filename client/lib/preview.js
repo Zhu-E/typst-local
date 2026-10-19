@@ -216,6 +216,23 @@ export class Preview {
     this.scroller.scrollTo({ top: this.scroller.scrollTop + dy, behavior: Math.abs(dy) > this.scroller.clientHeight * 2 ? 'instant' : 'smooth' });
   }
 
+  /** The page and y (pt) of the point `offset` px below the top of the viewport. */
+  viewportPoint(offset = 56) {
+    if (!this.pages.length) return null;
+    const line = this.scroller.getBoundingClientRect().top + offset;
+    let index = 0;
+    for (let lo = 0, hi = this.pages.length - 1; lo <= hi; ) {
+      const mid = (lo + hi) >> 1;
+      if (this.pages[mid].el.getBoundingClientRect().top <= line) {
+        index = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
+    }
+    const page = this.pages[index];
+    const rect = page.el.getBoundingClientRect();
+    return { page: index, y: (line - rect.top) / this.scale };
+  }
+
   get pageCount() {
     return this.pages.length;
   }

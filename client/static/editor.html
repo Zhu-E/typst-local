@@ -27,7 +27,11 @@
       <div class="pane-head sidebar-tabs">
         <button id="tab-files" class="tab active">Files</button>
         <button id="tab-history" class="tab">History</button>
-        <div class="pane-actions files-only">
+        <button id="tab-headings" class="tab">Headings</button>
+      </div>
+      <div class="files-toolbar files-only">
+        <span class="files-toolbar-label">Project files</span>
+        <div class="pane-actions">
           <button id="new-file-btn" class="icon-btn" title="New file">
             <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2H4v12h8V5z"/><path d="M8 7.5v4M6 9.5h4"/></svg>
           </button>
@@ -40,6 +44,13 @@
         </div>
       </div>
       <div id="tree" class="tree files-only"></div>
+      <div class="headings-panel headings-only">
+        <div class="headings-tools">
+          <input id="headings-filter" class="text-input" type="search" placeholder="Filter" autocomplete="off" spellcheck="false">
+          <div id="headings-depth" class="depth-picker" title="How many heading levels to show"></div>
+        </div>
+        <div id="headings-list" class="headings-list"></div>
+      </div>
       <div class="history-panel history-only">
         <button id="save-version-btn" class="btn small save-version">Save version…</button>
         <div id="history-list" class="history-list"></div>

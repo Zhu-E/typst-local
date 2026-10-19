@@ -297,14 +297,16 @@ export function initHistory(ctx) {
 
   function setTab(tab) {
     document.body.classList.toggle('history-tab', tab === 'history');
-    $('tab-files').classList.toggle('active', tab === 'files');
-    $('tab-history').classList.toggle('active', tab === 'history');
+    document.body.classList.toggle('headings-tab', tab === 'headings');
+    for (const name of ['files', 'history', 'headings']) $('tab-' + name).classList.toggle('active', tab === name);
     if (tab === 'history' && stale) refresh();
-    if (tab === 'files') exitVersion();
+    if (tab !== 'history') exitVersion();
+    ctx.onTab?.(tab);
   }
 
   $('tab-files').onclick = () => setTab('files');
   $('tab-history').onclick = () => setTab('history');
+  $('tab-headings').onclick = () => setTab('headings');
   $('save-version-btn').onclick = () => saveVersion().catch((e) => toast(e.message, 'error'));
   $('version-exit').onclick = () => exitVersion();
   document.addEventListener('keydown', (e) => {

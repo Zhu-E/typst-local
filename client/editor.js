@@ -24,6 +24,7 @@ import { typst } from './lib/typst-lang.js';
 import { Provider } from './lib/provider.js';
 import { Preview } from './lib/preview.js';
 import { initHistory } from './lib/history.js';
+import { initOutline } from './lib/outline.js';
 import { api, h, dialog, popupMenu, toast, getUser, saveUser, ensureUserName, initials } from './lib/common.js';
 
 const projectId = location.pathname.split('/').pop();
@@ -474,6 +475,7 @@ provider.addEventListener('message', ({ detail: msg }) => {
   if (msg.type === 'compile') {
     lastCompile = msg;
     if (msg.preview) preview.update(msg.preview);
+    if (msg.outline) outlineUI.update(msg.outline);
     $('preview').classList.toggle('stale', msg.status === 'error');
     applyDiagnostics();
     renderProblems();
@@ -517,6 +519,17 @@ const historyUI = initHistory({
     view = null;
   },
   onExit: () => openFile(currentPath, { focus: false }),
+  onTab: (tab) => outlineUI.setVisible(tab === 'headings'),
+});
+
+// ---- headings tab -------------------------------------------------------------
+
+const outlineUI = initOutline({
+  preview,
+  onSelect(heading) {
+    if (heading.path && files.get(heading.path) instanceof Y.Text) revealSource(heading.path, heading.position);
+    preview.scrollToPoint(heading.page, heading.y);
+  },
 });
 
 // ---- file tree --------------------------------------------------------------
