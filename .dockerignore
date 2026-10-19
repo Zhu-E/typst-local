@@ -1,0 +1,11 @@
+node_modules
+public
+data
+bin
+.rust
+engine/target
+.git
+.DS_Store
+*.log
+.env
+.node
