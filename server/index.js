@@ -11,6 +11,7 @@ import * as Y from 'yjs';
 import * as storage from './storage.js';
 import { getRoom, unloadRoom, saveAll, createProject, replaceText } from './rooms.js';
 import * as history from './history.js';
+import * as gitlog from './gitlog.js';
 import { templates } from './templates.js';
 import { createZip } from './zip.js';
 
@@ -68,6 +69,33 @@ app.post('/api/login', express.json(), (req, res) => {
 });
 
 app.use(express.static(PUBLIC_DIR, { index: false }));
+
+// Read-only git access to each project's history ("dumb" HTTP protocol):
+//   git clone http://host:port/git/<project-id>.git
+// With a password set, git prompts for credentials: any username, the access password.
+function basicAuthOk(req) {
+  const m = /^Basic\s+(.+)$/i.exec(req.headers.authorization || '');
+  if (!m) return false;
+  const decoded = Buffer.from(m[1], 'base64').toString('utf8');
+  const got = Buffer.from(decoded.slice(decoded.indexOf(':') + 1));
+  const want = Buffer.from(PASSWORD);
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+
+app.use('/git', (req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(405).end();
+  const m = /^\/([a-z0-9]{10})\.git(\/.*)?$/.exec(req.path);
+  if (!m || !storage.readMeta(m[1])) return res.status(404).end();
+  if (PASSWORD && !isAuthed(req) && !basicAuthOk(req)) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="Typst Local", charset="UTF-8"');
+    return res.status(401).end();
+  }
+  const dir = gitlog.repoDir(m[1]);
+  const file = path.resolve(dir, '.' + decodeURIComponent(m[2] || '/'));
+  if (!file.startsWith(dir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return res.status(404).end();
+  res.setHeader('Cache-Control', 'no-cache');
+  res.sendFile(file);
+});
 
 app.use((req, res, next) => {
   if (isAuthed(req)) return next();
@@ -237,7 +265,10 @@ api.get('/projects/:id/zip', loadRoom, (req, res) => {
 const cleanAuthor = (name) => String(name || '').trim().slice(0, 40) || null;
 
 api.get('/projects/:id/history', loadRoom, (req, res) => {
-  res.json(history.listVersions(req.room.id).reverse());
+  res.json({
+    versions: history.listVersions(req.room.id).reverse(),
+    git: gitlog.gitAvailable() ? { url: `/git/${req.room.id}.git`, branch: 'main' } : null,
+  });
 });
 
 api.post('/projects/:id/history', express.json(), loadRoom, (req, res) => {
@@ -258,6 +289,15 @@ api.get('/projects/:id/history/:vid', loadRoom, loadVersion, (req, res) => {
 
 api.patch('/projects/:id/history/:vid', express.json(), loadRoom, loadVersion, (req, res) => {
   res.json(req.room.renameVersion(req.version.id, cleanName(req.body?.name)));
+});
+
+// Puts a git tag on a version (empty removes it).
+api.put('/projects/:id/history/:vid/tag', express.json(), loadRoom, loadVersion, (req, res) => {
+  const tag = String(req.body?.tag || '').trim();
+  if (tag && !history.isValidTag(tag)) return res.status(400).json({ error: 'Tags may use letters, digits, ".", "-", "_" and "/"' });
+  const v = history.setTag(req.room.id, req.version.id, tag || null);
+  req.room.broadcastJSON({ type: 'history' });
+  res.json(v);
 });
 
 api.post('/projects/:id/history/:vid/restore', express.json(), loadRoom, loadVersion, (req, res) => {
@@ -315,6 +355,9 @@ setInterval(() => {
     ws.ping();
   }
 }, 30_000).unref();
+
+// Mirror existing version histories into git (in the background).
+gitlog.syncAll();
 
 server.listen(PORT, HOST, () => {
   console.log(`\nTypst Local is running${PASSWORD ? ' (password protected)' : ''}:\n`);

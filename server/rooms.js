@@ -8,6 +8,7 @@ import * as decoding from 'lib0/decoding';
 import * as storage from './storage.js';
 import { compiler } from './compiler.js';
 import * as history from './history.js';
+import * as gitlog from './gitlog.js';
 
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
@@ -20,6 +21,9 @@ const HISTORY_INTERVAL_MS = 5 * 60_000;
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
+
+// Commit hashes and stats arrive once the git mirror catches up.
+gitlog.events.on('synced', (id) => rooms.get(id)?.broadcastJSON({ type: 'history' }));
 
 compiler.on('reset', () => {
   for (const room of rooms.values()) {

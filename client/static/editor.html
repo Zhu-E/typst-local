@@ -52,7 +52,15 @@
         <div id="headings-list" class="headings-list"></div>
       </div>
       <div class="history-panel history-only">
-        <button id="save-version-btn" class="btn small save-version">Save version…</button>
+        <div class="git-bar">
+          <span class="git-branch" title="Every version is a commit on this branch">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="5.5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 7.1c0 2.5-3 2.2-6.2 4.1"/></svg>
+            main
+          </span>
+          <div class="spacer"></div>
+          <button id="git-clone-btn" class="btn small" title="Clone the history with git" hidden>Clone</button>
+          <button id="save-version-btn" class="btn small primary">Commit…</button>
+        </div>
         <div id="history-list" class="history-list"></div>
       </div>
       <div class="drop-hint">Drop files or folders to upload</div>

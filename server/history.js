@@ -5,12 +5,18 @@
 //
 // Snapshots store plain file contents (binary files by blob hash; blobs are
 // never deleted, so old versions keep working). Versions are kept forever.
-// `name` is a user-given label; `note` is a system description.
+// `name` is a user-given commit message; `note` is a system description;
+// `tag` is an optional git tag. gitlog.js mirrors every version into a git
+// repository and records `commit` (sha) and `stats`/`changes` here.
 import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { projectDir } from './storage.js';
+
+/** Emits 'change' (projectId) whenever versions are added or tagged. */
+export const events = new EventEmitter();
 
 const historyDir = (id) => path.join(projectDir(id), 'history');
 const indexPath = (id) => path.join(historyDir(id), 'index.json');
@@ -59,7 +65,34 @@ export function addVersion(id, snapshot, { name = null, note = null, authors = [
   const version = { id: vid, ts, name, note, authors: [...new Set(authors)].slice(0, 20), hash, files };
   versions.push(version);
   writeIndex(id, versions);
+  events.emit('change', id);
   return version;
+}
+
+/** Merges fields into a version's metadata (used to record git results). */
+export function updateVersion(id, vid, fields) {
+  const versions = listVersions(id);
+  const v = versions.find((x) => x.id === vid);
+  if (!v) return null;
+  Object.assign(v, fields);
+  writeIndex(id, versions);
+  return v;
+}
+
+/** Valid git tag names (a conservative subset of git-check-ref-format). */
+export const isValidTag = (tag) =>
+  typeof tag === 'string' && /^[A-Za-z0-9][A-Za-z0-9._\-/]{0,79}$/.test(tag) && !tag.includes('..') && !/\.lock$|\/$|\.$/.test(tag);
+
+/** Puts `tag` on a version (moving it off any other version); null removes it. */
+export function setTag(id, vid, tag) {
+  const versions = listVersions(id);
+  const v = versions.find((x) => x.id === vid);
+  if (!v) return null;
+  if (tag) for (const other of versions) if (other.tag === tag) other.tag = null;
+  v.tag = tag || null;
+  writeIndex(id, versions);
+  events.emit('change', id);
+  return v;
 }
 
 export function renameVersion(id, vid, name) {
@@ -68,5 +101,6 @@ export function renameVersion(id, vid, name) {
   if (!v) return null;
   v.name = name || null;
   writeIndex(id, versions);
+  events.emit('change', id);
   return v;
 }

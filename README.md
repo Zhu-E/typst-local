@@ -62,11 +62,14 @@ Fonts added to `data/fonts/` are picked up when the server restarts. Use the fon
 
 ## Version history
 
-Open the **History** tab in the left panel.
+Open the **History** tab in the left panel. It works like a git log, and every version is a real git commit.
 
 - **Automatic versions** are taken about 5 minutes after editing starts, and again when the last person leaves a project. Each one records who edited since the previous version.
-- **Save version…** records a named version right away. You can also name any automatic version.
+- **Commit…** records the project right away, with your message. The top row shows uncommitted changes since the last commit.
+- **Tag…** puts a git tag, like `v1.0`, on any commit.
+- **Opening a commit** shows that commit's own changes against its parent, or its differences from the project now ("vs. now"), with `+/−` line counts.
 - All versions are kept forever.
+- **Clone:** each project's history is mirrored into a git repository (`data/projects/<id>/history.git`). Clone it read-only with `git clone http://<server>/git/<project-id>.git`. If a password is set, use any username and the access password. Commits keep their original times and authors.
 - **Viewing a version:** click it to see which files changed since then. Each file shows its changes against the current text, and the preview pane shows that version rendered.
 - **Restore** changes the project back for everyone, as a normal live edit. The state just before the restore is saved first as a version, so a restore can always be reversed.
 

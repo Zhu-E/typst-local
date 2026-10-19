@@ -547,44 +547,92 @@ a { color: inherit; text-decoration: none; }
 .headings-empty { color: var(--text-muted); padding: 10px 8px; font-size: 13px; line-height: 1.5; }
 
 .history-panel { flex: 1; min-height: 0; flex-direction: column; }
-.save-version { margin: 8px 8px 4px; justify-content: center; height: 30px; }
-.history-list { flex: 1; overflow-y: auto; padding: 4px 6px 12px; }
-.history-day {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-faint);
-  padding: 12px 8px 4px;
+.git-bar { display: flex; align-items: center; gap: 6px; padding: 8px 8px 6px 12px; flex: none; }
+.git-bar [hidden] { display: none; }
+.git-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 2px 8px 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
-.history-empty { color: var(--text-muted); padding: 8px; }
 
-.version { border-radius: 8px; margin-bottom: 2px; }
-.version.selected { background: var(--accent-soft); }
-.version-head {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 8px;
-  row-gap: 1px;
+/* commit log */
+.commit { position: relative; padding-left: 20px; border-radius: 8px; }
+.commit::before { content: ''; position: absolute; left: 10px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+.commit:first-child::before { top: 16px; }
+.commit.root::before { bottom: calc(100% - 16px); }
+.commit::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 12px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 2px solid var(--text-faint);
+  background: var(--panel);
+}
+.commit.manual::after, .commit.tagged::after { border-color: var(--accent); background: var(--accent); }
+.commit.working::after { border-style: dashed; border-color: var(--text-faint); }
+.commit.working.dirty::after { border-color: var(--warning); }
+.commit.selected { background: var(--accent-soft); }
+.commit-head {
+  display: block;
   width: 100%;
-  padding: 7px 8px;
+  padding: 7px 8px 7px 4px;
   border: none;
   background: none;
   border-radius: 8px;
-  cursor: pointer;
   text-align: left;
+  cursor: pointer;
 }
-.version:not(.selected) .version-head:hover { background: var(--hover); }
-.version-time { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; padding-top: 1px; }
-.version-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
-.version.named .version-title { color: var(--text); font-weight: 600; }
-.version.selected .version-title { color: var(--accent); }
-.version-authors { grid-column: 2; font-size: 12px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-head:disabled { cursor: default; }
+.commit:not(.selected) .commit-head:not(:disabled):hover { background: var(--hover); }
+.commit-msg { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: var(--text); }
+.commit-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit:not(.manual):not(.tagged):not(.working) .commit-text { color: var(--text-muted); }
+.commit.manual .commit-text { font-weight: 600; }
+.commit.working .commit-msg { color: var(--text-muted); font-style: italic; }
+.commit.working.dirty .commit-msg { color: var(--warning); font-style: normal; font-weight: 600; }
+.tag-chip {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.commit-meta { display: flex; align-items: baseline; gap: 6px; margin-top: 2px; font-size: 11px; color: var(--text-faint); min-width: 0; }
+.commit-meta .sha { font-family: var(--mono); color: var(--text-muted); flex: none; }
+.commit-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-stat, .file-stat { flex: none; display: inline-flex; gap: 4px; font-family: var(--mono); font-size: 11px; }
+.ins { color: var(--ok); }
+.del { color: var(--error); }
+.commit-body { padding: 0 8px 10px 4px; }
+.commit-info { font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-bottom: 6px; }
+.sha-link { border: none; background: none; padding: 0; font: inherit; font-family: var(--mono); color: var(--accent); cursor: pointer; }
+.sha-link:hover { text-decoration: underline; }
+.commit-actions { display: flex; gap: 6px; margin-bottom: 8px; }
+.commit-actions .btn { flex: 1; justify-content: center; }
+.segmented { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-bottom: 6px; }
+.segmented button { flex: 1; height: 24px; border: none; background: var(--panel); font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.version-file .file-stat { margin-left: auto; }
+.history-list { flex: 1; overflow-y: auto; padding: 4px 6px 12px; }
+.history-empty { color: var(--text-muted); padding: 8px; }
 
-.version-body { padding: 2px 8px 10px; }
-.version-actions { display: flex; gap: 6px; margin-bottom: 8px; }
-.version-actions .btn { flex: 1; justify-content: center; }
-.version-files-label { font-size: 11px; color: var(--text-muted); margin: 4px 0; }
 .version-same { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
 .version-file {
   display: flex;
@@ -667,6 +715,11 @@ a { color: inherit; text-decoration: none; }
 .viewing-version .preview-pane .pane-head .zoom,
 .viewing-version .preview-pane .pane-head .page-info,
 .viewing-version .problems { display: none; }
+/* Uncommitted changes: diff in the editor, live preview stays. */
+.viewing-working .version-banner, .viewing-working .version-preview { display: none; }
+.viewing-working #preview { display: block; }
+.viewing-working .preview-pane .pane-head .zoom { display: flex; }
+.viewing-working .preview-pane .pane-head .page-info { display: inline; }
 
 /* ---- loading ---- */
 

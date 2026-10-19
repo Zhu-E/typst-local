@@ -197,6 +197,8 @@ fi
 NODE_BIN="$(command -v node)"
 info "Node.js $(node --version) ($NODE_BIN)"
 
+command -v git >/dev/null 2>&1 || apt_install git || warn "git not found: version history won't be mirrored to git repositories."
+
 bold "Installing dependencies"
 if [[ -f package-lock.json ]]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
 
