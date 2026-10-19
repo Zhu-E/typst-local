@@ -15,7 +15,7 @@ import {
 } from '@codemirror/view';
 import { EditorState, Compartment, EditorSelection, StateField, StateEffect } from '@codemirror/state';
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
-import { indentOnInput, bracketMatching, foldGutter, foldKeymap } from '@codemirror/language';
+import { indentOnInput, bracketMatching, foldGutter, foldKeymap, syntaxTree } from '@codemirror/language';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { lintGutter, setDiagnostics } from '@codemirror/lint';
@@ -175,6 +175,7 @@ function createEditor(path, ytext) {
       lintGutter(),
       flashField,
       EditorView.updateListener.of(followEditor),
+      EditorView.domEventHandlers({ paste: pasteIntoEditor, drop: dropIntoEditor, dragover: dragOverEditor }),
       EditorView.lineWrapping,
       EditorState.phrases.of({
         Find: 'Find',
@@ -430,6 +431,149 @@ async function followCursor() {
   }
   if (seq !== followSeq || path !== currentPath || res.kind !== 'position') return;
   preview.reveal(res.page, res.x, res.y, res.size);
+}
+
+// ---- pasting and dropping files into the editor ---------------------------------
+
+const IMAGE_EXT = /\.(png|jpe?g|gif|svg|webp)$/i;
+const MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/webp': 'webp' };
+const isImageFile = (file) => file.type in MIME_EXT || IMAGE_EXT.test(file.name || '');
+
+/** Where new images go: an existing top-level image folder, else "images". */
+function imageFolder() {
+  const tops = new Set([...files.keys(), ...folders.keys()].filter((p) => p.includes('/') || folders.has(p)).map((p) => p.split('/')[0]));
+  for (const want of ['assets', 'images', 'img', 'figures', 'media']) {
+    const hit = [...tops].find((t) => t.toLowerCase() === want);
+    if (hit) return hit;
+  }
+  return 'images';
+}
+
+/** Path of `target` as written from inside `fromFile` (Typst resolves paths relative to the file). */
+function relativePath(fromFile, target) {
+  const from = parentOf(fromFile).split('/').filter(Boolean);
+  const to = target.split('/');
+  let i = 0;
+  while (i < from.length && i < to.length - 1 && from[i] === to[i]) i++;
+  return [...Array(from.length - i).fill('..'), ...to.slice(i)].join('/');
+}
+
+/** Is `pos` in code (function arguments, code blocks) rather than markup? */
+function inCodeMode(state, pos) {
+  for (let node = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
+    if (['Markup', 'ContentBlock', 'Math', 'Equation'].includes(node.name)) return false;
+    if (['Code', 'CodeBlock', 'Args', 'Parenthesized', 'Array', 'Dict'].includes(node.name)) return true;
+  }
+  return false;
+}
+
+/** Inserts references to project files at `pos`: images, or #include for .typ files. */
+function insertReferences(view, pos, paths) {
+  const code = inCodeMode(view.state, pos);
+  const hash = code ? '' : '#';
+  const snippets = paths.map((p) => {
+    const rel = relativePath(currentPath, p);
+    return p.endsWith('.typ') ? `${hash}include "${rel}"` : `${hash}image("${rel}")`;
+  });
+  const text = snippets.join(code ? ', ' : '\n');
+  view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length }, userEvent: 'input.paste' });
+  view.focus();
+}
+
+const cleanName = (name) =>
+  name
+    .normalize('NFKD')
+    .replace(/[^\w.\-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-(?=\.)/g, '');
+
+/** Picks free project paths for images; pasted ones get a timestamped name. */
+function planImagePaths(list, pasted) {
+  const folder = imageFolder();
+  const taken = new Set(files.keys());
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return list.map((file, i) => {
+    const ext = (file.name?.match(IMAGE_EXT)?.[1] || MIME_EXT[file.type] || 'png').toLowerCase();
+    const generic = pasted || !file.name || /^image\.\w+$/i.test(file.name);
+    const stem = generic ? `pasted-${stamp}${list.length > 1 ? `-${i + 1}` : ''}` : cleanName(file.name.replace(/\.[^.]+$/, '')) || 'image';
+    let path = `${folder}/${stem}.${ext}`;
+    for (let n = 1; taken.has(path); n++) path = `${folder}/${stem}-${n}.${ext}`;
+    taken.add(path);
+    return { file, path };
+  });
+}
+
+/** Inserts the references right away (so they land where you meant), then uploads. */
+async function insertImages(view, pos, list, pasted) {
+  const plan = planImagePaths(list, pasted);
+  insertReferences(
+    view,
+    pos,
+    plan.map((p) => p.path),
+  );
+  const results = await Promise.all(
+    plan.map(({ file, path }) =>
+      fetch(`/api/projects/${projectId}/upload?path=${encodeURIComponent(path)}`, { method: 'POST', body: file })
+        .then((r) => r.ok)
+        .catch(() => false),
+    ),
+  );
+  const failed = plan.filter((_, i) => !results[i]).map((p) => p.path);
+  if (failed.length) toast(`Upload failed: ${failed.join(', ')}`, 'error');
+  else toast(plan.length > 1 ? `Added ${plan.length} images` : `Added ${plan[0].path}`);
+}
+
+function pasteIntoEditor(event, view) {
+  const data = event.clipboardData;
+  if (!data) return false;
+  // Pasting text (even if an image came along with it) stays a normal paste.
+  if (data.getData('text/plain')) return false;
+  const images = [...data.files].filter(isImageFile);
+  if (!images.length) return false;
+  event.preventDefault();
+  insertImages(view, view.state.selection.main.head, images, true);
+  return true;
+}
+
+function dragOverEditor(event) {
+  const types = event.dataTransfer?.types || [];
+  if (types.includes('Files') || types.includes(DRAG_TYPE)) {
+    event.preventDefault(); // allow the drop; CodeMirror still shows the drop cursor
+    event.dataTransfer.dropEffect = 'copy';
+  }
+  return false;
+}
+
+function dropIntoEditor(event, view) {
+  const dt = event.dataTransfer;
+  if (!dt) return false;
+  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.head;
+
+  // A file dragged from the Files tab: just reference it.
+  if (dt.types.includes(DRAG_TYPE)) {
+    event.preventDefault();
+    const item = dragging;
+    if (item && !item.isFolder && (IMAGE_EXT.test(item.path) || item.path.endsWith('.typ'))) {
+      insertReferences(view, pos, [item.path]);
+    } else if (item) {
+      toast('Only images and .typ files can be dropped into the editor');
+    }
+    return true;
+  }
+
+  const dropped = [...dt.files];
+  if (!dropped.length) return false;
+  event.preventDefault();
+  const images = dropped.filter(isImageFile);
+  const others = dropped.filter((f) => !isImageFile(f));
+  if (images.length) insertImages(view, pos, images, false);
+  if (others.length) {
+    uploadEntries(others.map((file) => ({ file, path: file.name })));
+    toast(`Uploaded ${others.map((f) => f.name).join(', ')} to the project (only images are inserted)`);
+  }
+  return true;
 }
 
 // ---- click-to-source --------------------------------------------------------
