@@ -596,7 +596,11 @@ function revealSource(path, position) {
 }
 
 $('preview').addEventListener('click', async (e) => {
-  if (e.button !== 0 || e.target.closest('a')) return; // real links keep working
+  if (e.button !== 0) return;
+  // External links have a URL and open normally; internal ones (table of
+  // contents, @references, #link(<label>)) have none and are resolved below.
+  const link = e.target.closest('a');
+  if (link && (link.getAttribute('href') || link.getAttribute('xlink:href'))) return;
   const pageEl = e.target.closest('.page');
   const index = preview.pages.findIndex((p) => p.el === pageEl);
   if (index < 0) return;
@@ -612,8 +616,24 @@ $('preview').addEventListener('click', async (e) => {
   }
   if (res.kind === 'file' && files.get(res.path) instanceof Y.Text) revealSource(res.path, res.position);
   else if (res.kind === 'url') window.open(res.url, '_blank', 'noopener');
-  else if (res.kind === 'position') preview.scrollToPoint(res.page, res.y);
+  else if (res.kind === 'position') followInternalLink(res.page, res.y);
 });
+
+// Internal links remember where you came from, like a PDF viewer's back button.
+const linkHistory = [];
+function followInternalLink(page, y) {
+  const here = preview.viewportPoint(40);
+  if (here) linkHistory.push(here);
+  if (linkHistory.length > 50) linkHistory.shift();
+  preview.scrollToPoint(page, y);
+  preview.flashAt(page, y);
+  $('preview-back').hidden = false;
+}
+$('preview-back').onclick = () => {
+  const back = linkHistory.pop();
+  if (back) preview.scrollToPoint(back.page, back.y);
+  $('preview-back').hidden = linkHistory.length === 0;
+};
 
 provider.addEventListener('message', ({ detail: msg }) => {
   if (msg.type === 'compile') {

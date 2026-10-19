@@ -207,6 +207,18 @@ export class Preview {
     page.el.append(caret);
   }
 
+  /** Briefly highlights the band around point `y` (pt) on page `index`. */
+  flashAt(index, y) {
+    const page = this.pages[index];
+    if (!page) return;
+    const band = document.createElement('div');
+    band.className = 'link-target';
+    band.style.top = Math.max(0, (y - 4) * this.scale) + 'px';
+    band.style.height = 24 * this.scale + 'px';
+    page.el.append(band);
+    setTimeout(() => band.remove(), 1600);
+  }
+
   /** Scrolls so that point `y` (pt) on page `index` is near the top. */
   scrollToPoint(index, y = 0) {
     const page = this.pages[index];
