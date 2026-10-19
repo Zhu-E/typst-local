@@ -183,13 +183,22 @@ class EngineBackend extends EventEmitter {
     });
   }
 
-  /** Maps a click on page `page` (0-based) at (x, y) in pt to a source location. */
-  jump(project, page, x, y) {
+  raw(payload) {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, raw: true });
-      this.proc.stdin.write(JSON.stringify({ type: 'jump', id, project, page, x, y }) + '\n');
+      this.proc.stdin.write(JSON.stringify({ ...payload, id }) + '\n');
     });
+  }
+
+  /** Maps a click on page `page` (0-based) at (x, y) in pt to a source location. */
+  jump(project, page, x, y) {
+    return this.raw({ type: 'jump', project, page, x, y });
+  }
+
+  /** Maps a cursor (UTF-16 offset into `path`) to a point in the preview. */
+  cursor(project, path, offset) {
+    return this.raw({ type: 'cursor', project, path, offset });
   }
 
   drop(project) {

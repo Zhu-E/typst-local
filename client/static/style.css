@@ -437,6 +437,22 @@ a { color: inherit; text-decoration: none; }
 .preview .page-svg { display: block; width: 100%; height: 100%; overflow: hidden; }
 .preview.stale .page { opacity: 0.8; }
 .preview .typst-text { cursor: pointer; }
+.preview .page { position: relative; }
+.preview-caret {
+  position: absolute;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  pointer-events: none;
+  animation: caret-fade 2.5s ease-out forwards;
+}
+@keyframes caret-fade {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+#follow-btn { margin-right: 6px; }
 .cm-jump-flash { animation: jump-flash 1.6s ease-out; }
 @keyframes jump-flash {
   0%, 30% { background-color: var(--selection); }

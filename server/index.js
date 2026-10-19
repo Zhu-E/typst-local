@@ -186,6 +186,16 @@ api.post('/projects/:id/jump', express.json(), loadRoom, async (req, res) => {
   res.json(result);
 });
 
+// Cursor-to-preview: where in the preview is the text at this cursor?
+api.post('/projects/:id/cursor', express.json(), loadRoom, async (req, res) => {
+  const p = storage.normalizePath(req.body?.path);
+  const offset = req.body?.offset;
+  if (!p || !Number.isFinite(offset)) return res.status(400).json({ error: 'path and offset are required' });
+  const result = await req.room.cursor(p, Math.max(0, Math.trunc(offset)));
+  if (!result) return res.status(501).json({ error: 'Needs the incremental engine (npm run build:engine)' });
+  res.json(result);
+});
+
 // Images in the live preview, handed out by content hash so browsers cache them.
 api.get('/projects/:id/img/:hash', loadRoom, (req, res) => {
   const img = req.room.images.get(req.params.hash);

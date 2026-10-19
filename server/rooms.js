@@ -580,6 +580,12 @@ export class Room {
     return compiler.jump(this.id, page, x, y);
   }
 
+  /** Preview position of the text at a cursor, or null if unsupported. */
+  async cursor(path, offset) {
+    if (!compiler.cursor) return null;
+    return compiler.cursor(this.id, path, offset);
+  }
+
   async pdf() {
     // Exporting a long document with many images is slow; reuse it while nothing changed.
     const version = this.docVersion || 0;

@@ -173,6 +173,7 @@ function createEditor(path, ytext) {
       highlightSelectionMatches(),
       lintGutter(),
       flashField,
+      EditorView.updateListener.of(followEditor),
       EditorView.lineWrapping,
       EditorState.phrases.of({
         Find: 'Find',
@@ -378,6 +379,58 @@ $('preview').addEventListener(
   { passive: false },
 );
 
+// ---- cursor-to-preview ------------------------------------------------------
+
+const FOLLOW_KEY = 'typst-local-follow';
+let following = true;
+try {
+  following = localStorage.getItem(FOLLOW_KEY) !== 'off';
+} catch {}
+let followAfterCompile = false;
+let followTimer;
+let followSeq = 0;
+
+function renderFollow() {
+  $('follow-btn').classList.toggle('active', following);
+  $('follow-btn').title = following ? 'Preview follows your cursor (click to turn off)' : 'Preview does not follow your cursor (click to turn on)';
+}
+$('follow-btn').onclick = () => {
+  following = !following;
+  try {
+    localStorage.setItem(FOLLOW_KEY, following ? 'on' : 'off');
+  } catch {}
+  renderFollow();
+  if (following) followCursor();
+};
+renderFollow();
+
+/** Editor update hook: follow local typing (after it compiles) and cursor moves. */
+function followEditor(update) {
+  if (!following || !currentPath?.endsWith('.typ')) return;
+  const local = update.transactions.some((tr) => ['input', 'delete', 'select', 'undo', 'redo'].some((e) => tr.isUserEvent(e)));
+  if (!local) return;
+  if (update.docChanged) {
+    followAfterCompile = true; // the preview doesn't contain the edit yet
+  } else {
+    clearTimeout(followTimer);
+    followTimer = setTimeout(followCursor, 120);
+  }
+}
+
+async function followCursor() {
+  if (!following || !view || historyUI.viewing || !currentPath?.endsWith('.typ')) return;
+  const seq = ++followSeq;
+  const path = currentPath;
+  let res;
+  try {
+    res = await api('POST', `/api/projects/${projectId}/cursor`, { path, offset: view.state.selection.main.head });
+  } catch {
+    return; // e.g. the fallback compiler, which can't do this
+  }
+  if (seq !== followSeq || path !== currentPath || res.kind !== 'position') return;
+  preview.reveal(res.page, res.x, res.y, res.size);
+}
+
 // ---- click-to-source --------------------------------------------------------
 
 let flashTimer;
@@ -427,6 +480,10 @@ provider.addEventListener('message', ({ detail: msg }) => {
     renderStatus();
     renderZoom();
     renderTree();
+    if (followAfterCompile) {
+      followAfterCompile = false;
+      followCursor();
+    }
   } else if (msg.type === 'history') {
     historyUI.onHistoryChanged();
   } else if (msg.type === 'restored') {

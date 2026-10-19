@@ -34,6 +34,8 @@ enum Request {
     Compile(CompileRequest),
     /// Where in the source did a click on the preview come from?
     Jump { id: u64, project: String, page: usize, x: f64, y: f64 },
+    /// Where in the preview is the text at this cursor? (`offset` in UTF-16 units)
+    Cursor { id: u64, project: String, path: String, offset: usize },
     Drop { project: String },
 }
 
@@ -54,6 +56,9 @@ struct JumpResponse {
     x: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     y: Option<f64>,
+    /// Font size at that point, in pt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -404,6 +409,92 @@ fn jump(project: &Project, id: u64, page: usize, x: f64, y: f64) -> JumpResponse
     }
 }
 
+/// Best glyph in `frame` produced by `span` at or before character `target`
+/// of that span's text: (offset in span, baseline point, font size in pt).
+fn glyph_for(frame: &typst::layout::Frame, span: Span, target: u16) -> Option<(u16, typst::layout::Point, f64)> {
+    use typst::layout::{FrameItem, Point};
+    let mut best: Option<(u16, Point, f64)> = None;
+    let mut consider = |cand: (u16, Point, f64)| {
+        if best.is_none_or(|b| cand.0 >= b.0) {
+            best = Some(cand);
+        }
+    };
+    for (pos, item) in frame.items() {
+        match item {
+            FrameItem::Group(group) => {
+                if let Some((off, point, size)) = glyph_for(&group.frame, span, target) {
+                    consider((off, *pos + point.transform(group.transform), size));
+                }
+            }
+            FrameItem::Text(text) => {
+                let mut x = pos.x;
+                for glyph in &text.glyphs {
+                    if glyph.span.0 == span && glyph.span.1 <= target {
+                        consider((glyph.span.1, Point::new(x, pos.y), text.size.to_pt()));
+                    }
+                    x += glyph.x_advance.at(text.size);
+                }
+            }
+            _ => {}
+        }
+    }
+    best
+}
+
+/// Like typst-ide's `jump_from_cursor`, but lands on the exact character
+/// instead of the start of the surrounding run of text, and works anywhere:
+/// if the syntax at the cursor (math, code, markup) produced no glyphs, it
+/// falls back to the nearest earlier piece of source that did.
+fn cursor_position(project: &Project, id: u64, path: &str, offset_utf16: usize) -> JumpResponse {
+    use typst::syntax::{LinkedNode, Side};
+    let none = JumpResponse { id, kind: "none", ..Default::default() };
+    let Some(doc) = &project.document else { return none };
+    let Ok(source) = project.source(project_id(path)) else { return none };
+    let Some(cursor) = source.lines().utf16_to_byte(offset_utf16.min(source.lines().len_utf16())) else { return none };
+
+    let locate = |node: &LinkedNode, target: u16| {
+        let mut best: Option<(usize, u16, typst::layout::Point, f64)> = None;
+        for (i, page) in doc.pages.iter().enumerate() {
+            if let Some((off, point, size)) = glyph_for(&page.frame, node.span(), target) {
+                if best.is_none_or(|b| off >= b.1) {
+                    best = Some((i, off, point, size));
+                }
+            }
+        }
+        best
+    };
+
+    let root = LinkedNode::new(source.root());
+    let at_cursor = [Side::Before, Side::After].into_iter().filter_map(|side| root.leaf_at(cursor, side));
+    let mut found = at_cursor
+        .clone()
+        .find_map(|node| locate(&node, u16::try_from(cursor.saturating_sub(node.offset())).unwrap_or(u16::MAX)));
+    if found.is_none() {
+        // Walk backwards through earlier syntax until something produced output.
+        let mut node = at_cursor.into_iter().next().and_then(|n| n.prev_leaf());
+        for _ in 0..200 {
+            let Some(n) = node else { break };
+            if let Some(hit) = locate(&n, u16::MAX) {
+                found = Some(hit);
+                break;
+            }
+            node = n.prev_leaf();
+        }
+    }
+    match found {
+        Some((page, _, point, size)) => JumpResponse {
+            id,
+            kind: "position",
+            page: Some(page),
+            x: Some(point.x.to_pt()),
+            y: Some(point.y.to_pt()),
+            size: Some(size),
+            ..Default::default()
+        },
+        None => none,
+    }
+}
+
 // ---- compiling --------------------------------------------------------------
 
 fn compile(project: &mut Project, req: CompileRequest) -> Response {
@@ -529,9 +620,18 @@ fn main() {
                 projects.remove(&project);
                 continue;
             }
-            Request::Jump { id, project, page, x, y } => {
-                let answer = match projects.get(&project) {
-                    Some(p) => catch_unwind(AssertUnwindSafe(|| jump(p, id, page, x, y))).unwrap_or(JumpResponse { id, kind: "none", ..Default::default() }),
+            Request::Jump { .. } | Request::Cursor { .. } => {
+                let (id, name) = match &request {
+                    Request::Jump { id, project, .. } | Request::Cursor { id, project, .. } => (*id, project.clone()),
+                    _ => unreachable!(),
+                };
+                let answer = match projects.get(&name) {
+                    Some(p) => catch_unwind(AssertUnwindSafe(|| match &request {
+                        Request::Jump { page, x, y, .. } => jump(p, id, *page, *x, *y),
+                        Request::Cursor { path, offset, .. } => cursor_position(p, id, path, *offset),
+                        _ => unreachable!(),
+                    }))
+                    .unwrap_or(JumpResponse { id, kind: "none", ..Default::default() }),
                     None => JumpResponse { id, kind: "none", ..Default::default() },
                 };
                 if serde_json::to_writer(&mut stdout, &answer).is_err() || stdout.write_all(b"\n").is_err() || stdout.flush().is_err() {

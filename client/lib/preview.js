@@ -121,13 +121,15 @@ export class Preview {
     svg.setAttribute('class', 'page-svg');
     svg.removeAttribute('width');
     svg.removeAttribute('height');
-    page.el.replaceChildren(svg);
+    // Replace only the drawing, so overlays like the cursor caret survive.
+    page.el.querySelector('.page-svg')?.remove();
+    page.el.prepend(svg);
     page.rendered = true;
   }
 
   unrender(page) {
     if (!page?.rendered) return;
-    page.el.replaceChildren();
+    page.el.querySelector('.page-svg')?.remove();
     page.rendered = false;
   }
 
@@ -172,12 +174,46 @@ export class Preview {
     if (next) this.setZoom(next, anchor);
   }
 
+  /**
+   * Marks the editor cursor's position (baseline point in pt, font size in pt)
+   * and scrolls it into view if it's off-screen.
+   */
+  reveal(index, x, y, size = 11) {
+    const page = this.pages[index];
+    if (!page) return;
+    const s = this.scale;
+    const c = this.scroller;
+    const sr = c.getBoundingClientRect();
+    const pr = page.el.getBoundingClientRect();
+    const top = pr.top - sr.top + (y - size) * s;
+    const bottom = pr.top - sr.top + (y + size * 0.3) * s;
+    const left = pr.left - sr.left + x * s;
+    const margin = 48;
+    const dy = top < margin || bottom > c.clientHeight - margin ? top - c.clientHeight / 3 : 0;
+    const dx = left < margin || left > c.clientWidth - margin ? left - c.clientWidth / 2 : 0;
+    // Absolute targets, so quick successive moves don't stack up; far jumps are instant.
+    if (dy || dx) {
+      c.scrollTo({
+        top: c.scrollTop + dy,
+        left: c.scrollLeft + dx,
+        behavior: Math.abs(dy) > c.clientHeight * 2 ? 'instant' : 'smooth',
+      });
+    }
+
+    this.caret?.remove();
+    const caret = (this.caret = document.createElement('div'));
+    caret.className = 'preview-caret';
+    Object.assign(caret.style, { left: x * s + 'px', top: (y - size * 0.8) * s + 'px', height: size * 1.05 * s + 'px' });
+    page.el.append(caret);
+  }
+
   /** Scrolls so that point `y` (pt) on page `index` is near the top. */
   scrollToPoint(index, y = 0) {
     const page = this.pages[index];
     if (!page) return;
     const offset = page.el.getBoundingClientRect().top - this.scroller.getBoundingClientRect().top;
-    this.scroller.scrollTo({ top: this.scroller.scrollTop + offset + y * this.scale - 40, behavior: 'smooth' });
+    const dy = offset + y * this.scale - 40;
+    this.scroller.scrollTo({ top: this.scroller.scrollTop + dy, behavior: Math.abs(dy) > this.scroller.clientHeight * 2 ? 'instant' : 'smooth' });
   }
 
   get pageCount() {
