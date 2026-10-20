@@ -1,9 +1,6 @@
-// Word export, two ways:
-// - htmlToDocx (default): the engine's HTML export converted by pandoc into a
-//   real Word document (headings, lists, tables, TOC), styled after the paged
-//   document using the engine's style probe, with its fonts embedded.
-// - pdfToDocx ("exact page layout"): rebuilds the PDF's pages with pdf2docx;
-//   looks like the PDF but is frozen layout that's hard to edit.
+// Word export: the engine's HTML export converted by pandoc into a real Word
+// document (headings, lists, tables, TOC), styled and laid out after the paged
+// document using the engine's style probe, with its fonts embedded.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -22,41 +19,6 @@ function pandocPath() {
 }
 
 export class DocxUnavailableError extends Error {}
-
-/** Python with pdf2docx: PDF2DOCX_PYTHON, the project-local .venv/ (setup.sh), or python3. */
-function pdf2docxPython() {
-  if (process.env.PDF2DOCX_PYTHON) return process.env.PDF2DOCX_PYTHON;
-  const local = path.join(ROOT, '.venv', 'bin', 'python');
-  return fs.existsSync(local) ? local : 'python3';
-}
-
-/** Converts a PDF (Buffer) into a .docx that keeps its layout. */
-export async function pdfToDocx(pdf) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'typst-local-docx-'));
-  const input = path.join(tmp, 'in.pdf');
-  const output = path.join(tmp, 'out.docx');
-  fs.writeFileSync(input, pdf);
-  const workers = String(Math.max(1, Math.min(4, os.cpus().length - 1)));
-  try {
-    await new Promise((resolve, reject) => {
-      const proc = spawn(pdf2docxPython(), [path.join(ROOT, 'scripts', 'pdf2docx_convert.py'), input, output, workers], {
-        stdio: ['ignore', 'ignore', 'pipe'],
-      });
-      const err = [];
-      proc.stderr.on('data', (d) => err.push(d));
-      proc.on('error', (e) => reject(e.code === 'ENOENT' ? new DocxUnavailableError('python3 is not installed') : e));
-      proc.on('close', (code) => {
-        const msg = Buffer.concat(err).toString();
-        if (code === 0) resolve();
-        else if (/No module named .?(pdf2docx|fitz|pymupdf)/i.test(msg)) reject(new DocxUnavailableError('pdf2docx is not installed (re-run setup.sh)'));
-        else reject(new Error('pdf2docx failed: ' + msg.slice(-500)));
-      });
-    });
-    return fs.readFileSync(output);
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
 
 /**
  * Figures as pandoc expects them: a picture and a <figcaption> directly

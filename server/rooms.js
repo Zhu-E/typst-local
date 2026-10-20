@@ -11,7 +11,7 @@ import * as storage from './storage.js';
 import { compiler } from './compiler.js';
 import * as history from './history.js';
 import * as gitlog from './gitlog.js';
-import { htmlToDocx, pdfToDocx, DocxUnavailableError } from './docx.js';
+import { htmlToDocx } from './docx.js';
 
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
@@ -614,29 +614,14 @@ export class Room {
   }
 
   /**
-   * The document as a Word file. "native" (default) is a real Word document
-   * styled after the PDF (fonts, colours, headings, header/footer, tables);
-   * "layout" rebuilds the PDF's page layout with pdf2docx (falls back to
-   * "native" when pdf2docx isn't installed).
+   * The document as a Word file: a real Word document styled after the PDF
+   * (fonts, colours, headings, header/footer, tables). Cached per version.
    */
-  async docx(style = 'native') {
+  async docx() {
     const version = this.docVersion || 0;
-    this.docxCache ??= {};
-    const cached = this.docxCache[style];
-    if (cached?.version === version) return cached.data;
-    let data;
-    if (style === 'layout') {
-      try {
-        data = await pdfToDocx(await this.pdf());
-      } catch (e) {
-        if (!(e instanceof DocxUnavailableError)) throw e;
-        console.warn(`[docx] ${e.message}; using the regular Word export`);
-        return this.docx('native');
-      }
-    } else {
-      data = await this.docxFromHtml();
-    }
-    this.docxCache[style] = { version, data };
+    if (this.docxCache?.version === version) return this.docxCache.data;
+    const data = await this.docxFromHtml();
+    this.docxCache = { version, data };
     return data;
   }
 

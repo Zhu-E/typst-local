@@ -11,7 +11,7 @@ A self-hosted, real-time collaborative [Typst](https://typst.app) editor. Run it
 - **Folders**: create folders (including empty ones), drag files and folders to move them, and upload whole folders from your computer by dragging them onto the file panel or with Upload → Upload folder.
 - **Editor**: CodeMirror 6 with Typst syntax highlighting, autocompletion, folding, search, and collaborative undo/redo.
 - **Version history**: automatic snapshots while you work, plus named versions. You can compare any version with the current project, preview or download its PDF, and restore it (see below).
-- **Export**: PDF, Word (`.docx`), and the project source as a `.zip`. The Word file is a real Word document (headings, lists, tables, a live table of contents) styled after the PDF for any template: fonts, sizes, colours, cell shading, page size, margins and running header/footer are measured from the compiled document, and the fonts are embedded. "Word, exact page layout" instead rebuilds the PDF's pages with pdf2docx.
+- **Export**: PDF, Word (`.docx`), and the project source as a `.zip`. The Word file is a real Word document (headings, lists, tables, a live table of contents) styled after the PDF for any template: fonts, sizes, colours, cell shading, page size, margins and running header/footer are measured from the compiled document, and the fonts are embedded.
 - **Typst Universe packages**: `#import "@preview/..."` works. Packages are downloaded on first use, so this needs internet access.
 - **Optional shared password** for the whole server.
 - Light and dark themes (follows your OS setting).

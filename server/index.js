@@ -247,7 +247,7 @@ api.get('/projects/:id/pdf', loadRoom, async (req, res) => {
 
 api.get('/projects/:id/docx', loadRoom, async (req, res) => {
   try {
-    const docx = await req.room.docx(req.query.style === 'layout' ? 'layout' : 'native');
+    const docx = await req.room.docx();
     const filename = (req.room.meta.name || 'document').replace(/[^\w\- .]+/g, '_') + '.docx';
     res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
