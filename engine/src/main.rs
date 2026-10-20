@@ -26,6 +26,8 @@ use typst_kit::download::{Downloader, ProgressSink};
 use typst_kit::fonts::{FontSearcher, FontSlot};
 use typst_kit::package::PackageStorage;
 
+mod probe;
+
 // ---- protocol ---------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -100,6 +102,9 @@ struct Response {
     num_pages: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     html: Option<String>,
+    /// How the paged document looks (for styling exports like Word).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<probe::Probe>,
     /// Every heading in the document, in order.
     #[serde(skip_serializing_if = "Option::is_none")]
     outline: Option<Vec<Heading>>,
@@ -400,7 +405,7 @@ fn error_response(id: u64, message: String) -> Response {
         pages: None,
         num_pages: None,
         outline: None,
-        html: None,
+        html: None, style: None,
         pdf: false,
         ms: 0,
     }
@@ -562,31 +567,11 @@ fn outline(project: &Project, doc: &PagedDocument) -> Vec<Heading> {
 
 // ---- HTML export ---------------------------------------------------------------
 
-/// Exports the document as HTML. A small wrapper file includes the real main
-/// file and draws equations as inline SVG, since HTML export has no math output.
+/// Exports the document as HTML through a wrapper (html-export.typ) that
+/// includes the real main file and keeps what HTML export would drop.
 fn export_html(project: &mut Project, id: u64, main: &str, start: Instant) -> Response {
     let wrapper = project_id("__typst_local_export__.typ");
-    let text = format!(
-        concat!(
-            // Equations, and image figures (templates often decorate images with
-            // layout-dependent effects that HTML export would drop), become
-            // inline SVG pictures.
-            // Only the figure's body is framed, so the rule can't meet itself again;
-            // the caption stays real text.
-            "#show math.equation: it => if it.block {{ html.frame(it) }} else {{ box(html.frame(it)) }}\n",
-            "#show figure.where(kind: image): it => {{ html.frame(it.body); it.caption }}\n",
-            // HTML export drops layout-only elements along with their contents;
-            // keep the contents in reading order instead.
-            "#show grid: it => it.children.filter(c => c.func() not in (grid.hline, grid.vline)).map(c => if c.has(\"body\") {{ c.body }} else {{ c }}).join()\n",
-            "#show stack: it => it.children.filter(c => type(c) == content).join(parbreak())\n",
-            "#show place: it => it.body\n",
-            "#show columns: it => it.body\n",
-            // Control characters (e.g. pasted terminal output) are invalid in HTML.
-            "#show regex(\"[\\u{{0}}-\\u{{8}}\\u{{b}}\\u{{c}}\\u{{e}}-\\u{{1f}}\\u{{7f}}]\"): none\n",
-            "#include \"/{}\"\n",
-        ),
-        main.replace('\\', "/").replace('"', "\\\"")
-    );
+    let text = include_str!("html-export.typ").replace("{MAIN}", &main.replace('\\', "/").replace('"', "\\\""));
     let bytes = Bytes::from_string(text.clone());
     project.files.insert(wrapper, Slot::Text { source: Source::new(wrapper, text), bytes });
     let real_main = project.main;
@@ -597,13 +582,24 @@ fn export_html(project: &mut Project, id: u64, main: &str, start: Instant) -> Re
 
     let warnings: Vec<Diagnostic> = result.warnings.iter().map(|d| convert_diagnostic(project, d)).collect();
     let html = result.output.and_then(|doc| typst_html::html(&doc));
+    // Measure the paged layout (through a wrapper that marks placed elements)
+    // so the export can be styled, and placed things pinned, like it.
+    let probe_wrapper = project_id("__typst_local_probe__.typ");
+    let probe_src = include_str!("paged-probe.typ").replace("{MAIN}", &main.replace('\\', "/").replace('"', "\\\""));
+    let probe_bytes = Bytes::from_string(probe_src.clone());
+    project.files.insert(probe_wrapper, Slot::Text { source: Source::new(probe_wrapper, probe_src), bytes: probe_bytes });
+    let real_main = project.main;
+    project.main = probe_wrapper;
+    let style = typst::compile::<PagedDocument>(&*project).output.ok().map(|doc| probe::probe(&doc));
+    project.main = real_main;
+    project.files.remove(&probe_wrapper);
     let ms = start.elapsed().as_millis() as u64;
     match html {
-        Ok(html) => Response { id, status: "ok", diagnostics: warnings, pages: None, num_pages: None, outline: None, html: Some(html), pdf: false, ms },
+        Ok(html) => Response { id, status: "ok", diagnostics: warnings, pages: None, num_pages: None, outline: None, html: Some(html), style, pdf: false, ms },
         Err(errors) => {
             let mut all: Vec<Diagnostic> = errors.iter().map(|d| convert_diagnostic(project, d)).collect();
             all.extend(warnings);
-            Response { id, status: "error", diagnostics: all, pages: None, num_pages: None, outline: None, html: None, pdf: false, ms }
+            Response { id, status: "error", diagnostics: all, pages: None, num_pages: None, outline: None, html: None, style: None, pdf: false, ms }
         }
     }
 }
@@ -651,7 +647,7 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
                 pages: None,
                 num_pages: None,
                 outline: None,
-                html: None,
+                html: None, style: None,
                 pdf: false,
                 ms: start.elapsed().as_millis() as u64,
             };
@@ -668,10 +664,10 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
                 })
             });
         return match written {
-            Ok(()) => Response { id: req.id, status, diagnostics, pages: None, num_pages: Some(doc.pages.len()), outline: None, html: None, pdf: true, ms: start.elapsed().as_millis() as u64 },
+            Ok(()) => Response { id: req.id, status, diagnostics, pages: None, num_pages: Some(doc.pages.len()), outline: None, html: None, style: None, pdf: true, ms: start.elapsed().as_millis() as u64 },
             Err(mut errs) => {
                 errs.append(&mut diagnostics);
-                Response { id: req.id, status: "error", diagnostics: errs, pages: None, num_pages: None, outline: None, html: None, pdf: false, ms: start.elapsed().as_millis() as u64 }
+                Response { id: req.id, status: "error", diagnostics: errs, pages: None, num_pages: None, outline: None, html: None, style: None, pdf: false, ms: start.elapsed().as_millis() as u64 }
             }
         };
     }
@@ -710,7 +706,7 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
         pages: Some(pages),
         num_pages: Some(num_pages),
         outline: Some(outline),
-        html: None,
+        html: None, style: None,
         pdf: false,
         ms: start.elapsed().as_millis() as u64,
     }

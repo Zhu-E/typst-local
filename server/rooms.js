@@ -1,5 +1,7 @@
 // A Room is one loaded project: its Yjs document, the websocket clients editing
 // it, autosave, and the compile loop that pushes previews to every client.
+import fs from 'node:fs';
+import path from 'node:path';
 import * as Y from 'yjs';
 import * as syncProtocol from 'y-protocols/sync';
 import * as awarenessProtocol from 'y-protocols/awareness';
@@ -9,7 +11,7 @@ import * as storage from './storage.js';
 import { compiler } from './compiler.js';
 import * as history from './history.js';
 import * as gitlog from './gitlog.js';
-import { htmlToDocx } from './docx.js';
+import { htmlToDocx, pdfToDocx, DocxUnavailableError } from './docx.js';
 
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
@@ -611,10 +613,34 @@ export class Room {
     return compiler.cursor(this.id, path, offset);
   }
 
-  /** The document as a Word file (Typst HTML export, converted by pandoc). */
-  async docx() {
+  /**
+   * The document as a Word file. "native" (default) is a real Word document
+   * styled after the PDF (fonts, colours, headings, header/footer, tables);
+   * "layout" rebuilds the PDF's page layout with pdf2docx (falls back to
+   * "native" when pdf2docx isn't installed).
+   */
+  async docx(style = 'native') {
     const version = this.docVersion || 0;
-    if (this.docxCache?.version === version) return this.docxCache.data;
+    this.docxCache ??= {};
+    const cached = this.docxCache[style];
+    if (cached?.version === version) return cached.data;
+    let data;
+    if (style === 'layout') {
+      try {
+        data = await pdfToDocx(await this.pdf());
+      } catch (e) {
+        if (!(e instanceof DocxUnavailableError)) throw e;
+        console.warn(`[docx] ${e.message}; using the regular Word export`);
+        return this.docx('native');
+      }
+    } else {
+      data = await this.docxFromHtml();
+    }
+    this.docxCache[style] = { version, data };
+    return data;
+  }
+
+  async docxFromHtml() {
     const res = await this.request({ html: true });
     if (!res.html) {
       const first = res.diagnostics?.find((d) => d.severity === 'error');
@@ -622,9 +648,15 @@ export class Room {
         first ? `${first.path ? first.path + ': ' : ''}${first.message}` : 'Word export needs the incremental engine (npm run build:engine)',
       );
     }
-    const data = await htmlToDocx(res.html);
-    this.docxCache = { version, data };
-    return data;
+    // Fonts that can be embedded: the project's own font files and the server's font library.
+    const fontFiles = [];
+    this.files.forEach((v, rel) => {
+      if (v?.blob && storage.isFontPath(rel)) fontFiles.push(storage.blobPath(this.id, v.blob));
+    });
+    try {
+      for (const f of fs.readdirSync(storage.FONTS_DIR)) if (storage.isFontPath(f)) fontFiles.push(path.join(storage.FONTS_DIR, f));
+    } catch {}
+    return htmlToDocx(res.html, res.style, fontFiles);
   }
 
   async pdf() {

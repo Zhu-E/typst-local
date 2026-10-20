@@ -10,3 +10,4 @@ engine/target
 .env
 .node
 .pandoc
+.venv

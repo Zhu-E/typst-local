@@ -33,6 +33,7 @@ MIN_NODE=22
 MIN_RUST="1.89"
 RUST_TOOLCHAIN="1.92.0"
 PANDOC_VERSION="3.12.1"
+PDF2DOCX_VERSION="0.5.13"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -290,6 +291,26 @@ else
     rm -rf "$tmp"
   fi
   [[ -x .pandoc/bin/pandoc ]] || warn "No pandoc: Download → Word won't work (everything else does)."
+fi
+
+# pdf2docx rebuilds Word files from the PDF so they look the same. Installed
+# into a project-local Python environment (.venv/).
+bold "Word export (pdf2docx)"
+if [[ -x .venv/bin/python ]] && .venv/bin/python -c "import pdf2docx" 2>/dev/null; then
+  info "pdf2docx (.venv/)"
+else
+  if ! command -v python3 >/dev/null 2>&1; then apt_install python3 python3-venv || true; fi
+  if command -v python3 >/dev/null 2>&1 && ! python3 -c "import ensurepip, venv" 2>/dev/null; then apt_install python3-venv || true; fi
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' &&
+    confirm "Install pdf2docx $PDF2DOCX_VERSION into this folder (.venv/, ~150 MB) for Word downloads that match the PDF?"; then
+    if python3 -m venv .venv && .venv/bin/python -m pip install -q --upgrade pip && .venv/bin/python -m pip install -q "pdf2docx==$PDF2DOCX_VERSION"; then
+      info "pdf2docx installed in .venv/"
+    else
+      warn "pdf2docx failed to install; Word downloads will use the simpler text-only export."
+    fi
+  else
+    warn "Skipping pdf2docx (needs Python 3.9+); Word downloads will use the simpler text-only export."
+  fi
 fi
 
 bold "Writing settings"
