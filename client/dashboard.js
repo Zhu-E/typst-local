@@ -65,6 +65,7 @@ function projectMenu(e, p) {
       },
     },
     { label: 'Download PDF', onclick: () => (location.href = `/api/projects/${p.id}/pdf`) },
+    { label: 'Download Word (.docx)', onclick: () => (location.href = `/api/projects/${p.id}/docx`) },
     { label: 'Download source (.zip)', onclick: () => (location.href = `/api/projects/${p.id}/zip`) },
     'sep',
     {

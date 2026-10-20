@@ -15,6 +15,11 @@ if (fs.existsSync(path.join(local, 'cargo', 'bin', 'cargo'))) {
 }
 execFileSync(cargo, ['build', '--release'], { cwd: path.join(root, 'engine'), env, stdio: 'inherit' });
 fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
-fs.copyFileSync(path.join(root, 'engine', 'target', 'release', 'typst-engine'), path.join(root, 'bin', 'typst-engine'));
-fs.chmodSync(path.join(root, 'bin', 'typst-engine'), 0o755);
+// Write a new file and rename it into place: overwriting a binary in place
+// makes macOS kill it on launch (its cached code signature no longer matches).
+const target = path.join(root, 'bin', 'typst-engine');
+const tmp = target + '.new';
+fs.copyFileSync(path.join(root, 'engine', 'target', 'release', 'typst-engine'), tmp);
+fs.chmodSync(tmp, 0o755);
+fs.renameSync(tmp, target);
 console.log('Built bin/typst-engine');

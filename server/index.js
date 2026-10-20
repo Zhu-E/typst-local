@@ -245,6 +245,18 @@ api.get('/projects/:id/pdf', loadRoom, async (req, res) => {
   }
 });
 
+api.get('/projects/:id/docx', loadRoom, async (req, res) => {
+  try {
+    const docx = await req.room.docx();
+    const filename = (req.room.meta.name || 'document').replace(/[^\w\- .]+/g, '_') + '.docx';
+    res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(docx);
+  } catch (e) {
+    res.status(422).type('text/plain').send('Could not create the Word document:\n' + e.message);
+  }
+});
+
 api.get('/projects/:id/zip', loadRoom, (req, res) => {
   const entries = [];
   req.room.files.forEach((v, rel) => {

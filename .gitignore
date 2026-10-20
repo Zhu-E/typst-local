@@ -7,3 +7,4 @@ engine/target/
 bin/
 .env
 .node/
+.pandoc/

@@ -32,6 +32,7 @@ ASSUME_YES=0
 MIN_NODE=22
 MIN_RUST="1.89"
 RUST_TOOLCHAIN="1.92.0"
+PANDOC_VERSION="3.12.1"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -256,6 +257,39 @@ if [[ $BUILD_ENGINE -eq 1 ]]; then
   else
     warn "Skipping the engine; the server will use the slower built-in compiler. Re-run with -y to install Rust locally."
   fi
+fi
+
+# pandoc converts documents to Word (.docx). Uses a system pandoc if present,
+# else downloads the official build into .pandoc/.
+bold "Word export (pandoc)"
+if [[ -x .pandoc/bin/pandoc ]]; then
+  info "pandoc $(.pandoc/bin/pandoc --version | head -n1 | awk '{print $2}') (.pandoc/)"
+elif command -v pandoc >/dev/null 2>&1; then
+  info "pandoc $(pandoc --version | head -n1 | awk '{print $2}') (system)"
+else
+  case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64) PANDOC_FILE="pandoc-$PANDOC_VERSION-arm64-macOS.zip" ;;
+    Darwin-x86_64) PANDOC_FILE="pandoc-$PANDOC_VERSION-x86_64-macOS.zip" ;;
+    Linux-x86_64) PANDOC_FILE="pandoc-$PANDOC_VERSION-linux-amd64.tar.gz" ;;
+    Linux-aarch64 | Linux-arm64) PANDOC_FILE="pandoc-$PANDOC_VERSION-linux-arm64.tar.gz" ;;
+    *) PANDOC_FILE="" ;;
+  esac
+  if [[ -n "$PANDOC_FILE" ]] && confirm "Download pandoc $PANDOC_VERSION into this folder (.pandoc/, ~200 MB) for Word export?"; then
+    tmp="$(mktemp -d)"
+    if fetch "https://github.com/jgm/pandoc/releases/download/$PANDOC_VERSION/$PANDOC_FILE" "$tmp/$PANDOC_FILE"; then
+      case "$PANDOC_FILE" in
+        *.zip) (cd "$tmp" && unzip -q "$PANDOC_FILE") ;;
+        *) tar -xzf "$tmp/$PANDOC_FILE" -C "$tmp" ;;
+      esac
+      found="$(find "$tmp" -type f -path '*/bin/pandoc' | head -n1)"
+      if [[ -n "$found" ]]; then
+        mkdir -p .pandoc/bin && cp "$found" .pandoc/bin/pandoc && chmod +x .pandoc/bin/pandoc
+        info "pandoc $PANDOC_VERSION installed in .pandoc/"
+      fi
+    fi
+    rm -rf "$tmp"
+  fi
+  [[ -x .pandoc/bin/pandoc ]] || warn "No pandoc: Download → Word won't work (everything else does)."
 fi
 
 bold "Writing settings"

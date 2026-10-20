@@ -18,8 +18,13 @@ RUN node build.mjs
 
 # ---- runtime ----
 FROM node:22-bookworm-slim
+ARG PANDOC_VERSION=3.12.1
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates fontconfig git \
+ && apt-get install -y --no-install-recommends ca-certificates fontconfig git curl \
+ && ARCH="$(dpkg --print-architecture)" \
+ && curl -fsSL "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-linux-${ARCH}.tar.gz" \
+    | tar -xz -C /usr/local --strip-components=1 "pandoc-${PANDOC_VERSION}/bin/pandoc" \
+ && apt-get purge -y curl && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./

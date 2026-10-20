@@ -1230,6 +1230,20 @@ $('download-btn').onclick = (e) =>
         tab.location.href = `/api/projects/${projectId}/pdf?inline=1`;
       },
     },
+    {
+      label: 'Word document (.docx)',
+      onclick: async () => {
+        toast('Preparing Word document…');
+        const res = await fetch(`/api/projects/${projectId}/docx`);
+        if (!res.ok) return toast((await res.text()).split('\n').slice(1).join(' ') || 'Word export failed', 'error');
+        const url = URL.createObjectURL(await res.blob());
+        const a = h('a', { href: url, download: ($('project-name').textContent || 'document') + '.docx' });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      },
+    },
     { label: 'Source files (.zip)', onclick: () => (location.href = `/api/projects/${projectId}/zip`) },
   ]);
 

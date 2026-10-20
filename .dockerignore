@@ -9,3 +9,4 @@ engine/target
 *.log
 .env
 .node
+.pandoc

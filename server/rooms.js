@@ -9,6 +9,7 @@ import * as storage from './storage.js';
 import { compiler } from './compiler.js';
 import * as history from './history.js';
 import * as gitlog from './gitlog.js';
+import { htmlToDocx } from './docx.js';
 
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
@@ -608,6 +609,22 @@ export class Room {
   async cursor(path, offset) {
     if (!compiler.cursor) return null;
     return compiler.cursor(this.id, path, offset);
+  }
+
+  /** The document as a Word file (Typst HTML export, converted by pandoc). */
+  async docx() {
+    const version = this.docVersion || 0;
+    if (this.docxCache?.version === version) return this.docxCache.data;
+    const res = await this.request({ html: true });
+    if (!res.html) {
+      const first = res.diagnostics?.find((d) => d.severity === 'error');
+      throw new Error(
+        first ? `${first.path ? first.path + ': ' : ''}${first.message}` : 'Word export needs the incremental engine (npm run build:engine)',
+      );
+    }
+    const data = await htmlToDocx(res.html);
+    this.docxCache = { version, data };
+    return data;
   }
 
   async pdf() {
