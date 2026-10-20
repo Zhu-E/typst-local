@@ -1234,11 +1234,25 @@ $('download-btn').onclick = (e) =>
     { label: 'Source files (.zip)', onclick: () => (location.href = `/api/projects/${projectId}/zip`) },
   ]);
 
+let docxPending = false;
 async function downloadDocx() {
-  toast('Preparing Word document… (long documents take a few seconds)');
-  const res = await fetch(`/api/projects/${projectId}/docx`);
-  if (!res.ok) return toast((await res.text()).split('\n').slice(1).join(' ') || 'Word export failed', 'error');
-  const url = URL.createObjectURL(await res.blob());
+  if (docxPending) return; // its message is still showing
+  docxPending = true;
+  // Stays up until the file is ready (long documents take a while); an error
+  // message replaces it.
+  const done = toast('Preparing Word document…', 'info', { duration: null });
+  let blob;
+  try {
+    const res = await fetch(`/api/projects/${projectId}/docx`);
+    if (!res.ok) return toast((await res.text()).split('\n').slice(1).join(' ') || 'Word export failed', 'error');
+    blob = await res.blob();
+  } catch {
+    return toast('Word export failed: the server could not be reached', 'error');
+  } finally {
+    docxPending = false;
+  }
+  done();
+  const url = URL.createObjectURL(blob);
   const a = h('a', { href: url, download: ($('project-name').textContent || 'document') + '.docx' });
   document.body.append(a);
   a.click();

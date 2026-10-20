@@ -84,7 +84,12 @@ export function initials(name) {
 }
 
 let toastTimer;
-export function toast(text, kind = 'info') {
+let toastId = 0;
+/**
+ * Shows a short message. With `duration: null` it stays until the returned
+ * function is called (or another message replaces it).
+ */
+export function toast(text, kind = 'info', { duration = 2600 } = {}) {
   let el = document.getElementById('toast');
   if (!el) {
     el = h('div');
@@ -94,7 +99,12 @@ export function toast(text, kind = 'info') {
   el.textContent = text;
   el.className = 'show ' + kind;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.className = ''), 2600);
+  const id = ++toastId;
+  const hide = () => {
+    if (id === toastId) el.className = '';
+  };
+  if (duration !== null) toastTimer = setTimeout(hide, duration);
+  return hide;
 }
 
 /** Promise-based modal dialog. fields: [{name, label, value, placeholder, type, options}] */
