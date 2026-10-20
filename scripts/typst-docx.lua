@@ -2,11 +2,14 @@
 --
 -- * Typst's HTML export reserves <h1> for the document title, so `= Heading`
 --   arrives as <h2>: shift levels back so it becomes Word's "Heading 1".
--- * The document's own outline was replaced by a marker paragraph before
---   conversion; turn it into a real Word table of contents field.
+-- * The document's own outline arrives as marker paragraphs around its
+--   entries (see markTableOfContents in docx.js); wrap them in a real Word
+--   table of contents field, so Word can refresh it.
 -- * The template already renders its title page, so drop pandoc's title block.
 
 local MARKER = 'TYPSTLOCALTOC::'
+local END_MARKER = 'TYPSTLOCALTOCEND'
+local toc_levels = os.getenv('TYPST_LOCAL_TOC_LEVELS') or '3'
 local toc_break_before = os.getenv('TYPST_LOCAL_TOC_BREAK_BEFORE') == '1'
 local toc_break_after = os.getenv('TYPST_LOCAL_TOC_BREAK_AFTER') == '1'
 
@@ -16,20 +19,76 @@ local function escape(s)
   return (s:gsub('&', '&amp;'):gsub('<', '&lt;'):gsub('>', '&gt;'))
 end
 
-local function toc_field(title)
-  local heading = ''
-  if title ~= '' then
-    heading = '<w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t xml:space="preserve">'
-      .. escape(title) .. '</w:t></w:r></w:p>'
-  end
-  return '<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>'
-    .. heading
-    .. '<w:p><w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r>'
-    .. '<w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r>'
+local function escape_title(title)
+  if title == '' then return '' end
+  return '<w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t xml:space="preserve">' .. escape(title) .. '</w:t></w:r></w:p>'
+end
+
+local SDT_OPEN = '<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>'
+local SDT_CLOSE = '</w:sdtContent></w:sdt>'
+
+local function field_begin()
+  return '<w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r>'
+    .. '<w:r><w:instrText xml:space="preserve"> TOC \\o "1-' .. toc_levels .. '" \\h \\z \\u </w:instrText></w:r>'
     .. '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
-    .. '<w:r><w:t>Right-click here and choose Update Field to show the table of contents.</w:t></w:r>'
-    .. '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
-    .. '</w:sdtContent></w:sdt>'
+end
+local FIELD_END = '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+
+-- The paragraph inside an entry (entries arrive as styled divs).
+local function entry_para(block)
+  if block.t == 'Div' and block.content[1] then return block.content[1] end
+  return block
+end
+
+-- The table of contents: Word's TOC field around the document's own entries
+-- (so it shows before Word refreshes it), or a placeholder without entries.
+local function toc_blocks(title, entries)
+  local blocks = pandoc.List()
+  if toc_break_before then blocks:insert(pandoc.RawBlock('openxml', PAGE_BREAK)) end
+  blocks:insert(pandoc.RawBlock('openxml', SDT_OPEN .. escape_title(title)))
+  if #entries == 0 then
+    blocks:insert(pandoc.RawBlock('openxml', '<w:p>' .. field_begin()
+      .. '<w:r><w:t>Right-click here and choose Update Field to show the table of contents.</w:t></w:r>' .. FIELD_END .. '</w:p>'))
+  else
+    local first = entry_para(entries[1])
+    if first.content then first.content:insert(1, pandoc.RawInline('openxml', field_begin())) end
+    local last = entry_para(entries[#entries])
+    if last.content then last.content:insert(pandoc.RawInline('openxml', FIELD_END)) end
+    blocks:extend(entries)
+  end
+  blocks:insert(pandoc.RawBlock('openxml', SDT_CLOSE))
+  if toc_break_after then blocks:insert(pandoc.RawBlock('openxml', PAGE_BREAK)) end
+  return blocks
+end
+
+local function block_text(block)
+  if block.t == 'Para' or block.t == 'Plain' then return pandoc.utils.stringify(block) end
+  return ''
+end
+
+-- Replace the marked table of contents (start marker, entries, end marker).
+function Pandoc(doc)
+  local out = pandoc.List()
+  local blocks = doc.blocks
+  local i = 1
+  while i <= #blocks do
+    local text = block_text(blocks[i])
+    if text:sub(1, #MARKER) == MARKER then
+      local entries = pandoc.List()
+      local j = i + 1
+      while j <= #blocks and block_text(blocks[j]) ~= END_MARKER do
+        entries:insert(blocks[j])
+        j = j + 1
+      end
+      out:extend(toc_blocks(text:sub(#MARKER + 1), entries))
+      i = j + 1
+    else
+      out:insert(blocks[i])
+      i = i + 1
+    end
+  end
+  doc.blocks = out
+  return doc
 end
 
 function Header(el)
@@ -38,22 +97,6 @@ function Header(el)
   end
   el.level = el.level - 1
   return el
-end
-
-function Para(el)
-  local text = pandoc.utils.stringify(el)
-  if text:sub(1, #MARKER) ~= MARKER then
-    return nil
-  end
-  local blocks = {}
-  if toc_break_before then
-    table.insert(blocks, pandoc.RawBlock('openxml', PAGE_BREAK))
-  end
-  table.insert(blocks, pandoc.RawBlock('openxml', toc_field(text:sub(#MARKER + 1))))
-  if toc_break_after then
-    table.insert(blocks, pandoc.RawBlock('openxml', PAGE_BREAK))
-  end
-  return blocks
 end
 
 -- Underlined text (Typst's underline, e.g. on links) arrives as a styled span.

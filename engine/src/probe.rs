@@ -9,7 +9,7 @@ use base64::Engine as _;
 use typst::foundations::{Dict, NativeElement, Smart, StyleChain, Value};
 use typst::introspection::{MetadataElem, Tag};
 use typst::layout::{Abs, Frame, FrameItem, GroupItem, PagedDocument, Point, Size, Transform};
-use typst::model::{HeadingElem, OutlineElem};
+use typst::model::{HeadingElem, Numbering, OutlineElem, OutlineEntry};
 use typst::text::FontStyle;
 use typst::visualize::Paint;
 
@@ -44,6 +44,9 @@ pub struct Probe {
     pub heading_page_break: Vec<bool>,
     /// For every heading in document order: whether it starts a new page.
     pub heading_breaks: Vec<bool>,
+    /// For every heading in document order: whether it's listed in the outline.
+    pub heading_outlined: Vec<bool>,
+    pub toc: Option<Toc>,
     pub link_color: Option<String>,
     /// Baseline distance divided by font size.
     pub line_height: Option<f64>,
@@ -63,6 +66,34 @@ pub struct Probe {
     pub figure_sizes: Vec<[f64; 2]>,
     /// Every image's size on the page: (key, w, h in pt), in order.
     pub image_sizes: Vec<(String, f64, f64)>,
+}
+
+/// How the document's table of contents (its outline) looks, so the Word
+/// table of contents can be styled the same.
+#[derive(Serialize)]
+pub struct Toc {
+    pub title_center: bool,
+    pub title_style: Option<TextStyle>,
+    /// Per level (1 first): text style, indent from the margin (pt) and the
+    /// extra space above entries of that level (pt).
+    pub levels: Vec<Option<TocLevel>>,
+    /// Baseline-to-baseline distance between entries (pt).
+    pub pitch: Option<f64>,
+    /// Each entry in order: its level and the page number it shows.
+    pub entries: Vec<TocEntry>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct TocLevel {
+    pub style: TextStyle,
+    pub indent: f64,
+    pub above: f64,
+}
+
+#[derive(Serialize)]
+pub struct TocEntry {
+    pub level: usize,
+    pub page: String,
 }
 
 #[derive(Serialize)]
@@ -298,6 +329,80 @@ fn placements(doc: &PagedDocument) -> Vec<Placement> {
         });
     }
     out
+}
+
+/// The page number a page shows (its numbering pattern applied, else plain).
+fn page_label(doc: &PagedDocument, page: usize) -> String {
+    let Some(p) = doc.pages.get(page) else { return String::new() };
+    match &p.numbering {
+        Some(Numbering::Pattern(pattern)) => {
+            let label = pattern.apply(&[p.number]);
+            // Patterns like "Page 1 of 2" only make sense in footers; keep the number.
+            if label.chars().filter(|c| c.is_alphabetic()).count() > 4 { p.number.to_string() } else { label.to_string() }
+        }
+        _ => p.number.to_string(),
+    }
+}
+
+/// Measures the table of contents: where each entry's text sits and how it looks.
+fn table_of_contents(doc: &PagedDocument, runs: &[Run], left: f64, width: f64) -> Option<Toc> {
+    let outline = doc.introspector.query(&OutlineElem::ELEM.select()).iter().filter_map(|c| c.location()).next()?;
+    let mut title_center = false;
+    let mut title_style = None;
+    {
+        let pos = doc.introspector.position(outline);
+        let page = pos.page.get() - 1;
+        let py = pos.point.y.to_pt();
+        let near: Vec<&Run> = runs.iter().filter(|r| r.page == page && r.y >= py - 1.0 && r.y <= py + 60.0 && !r.mono).collect();
+        if let Some(min_y) = near.iter().map(|r| r.y).reduce(f64::min) {
+            let line: Vec<&&Run> = near.iter().filter(|r| (r.y - min_y).abs() < 2.0).collect();
+            let (x0, x1) = line.iter().fold((f64::MAX, f64::MIN), |(a, b), r| (a.min(r.x), b.max(r.x + r.width)));
+            title_center = ((x0 + x1) / 2.0 - (left + width / 2.0)).abs() < 6.0 && x0 > left + 12.0;
+            title_style = line.iter().max_by_key(|r| r.style.size).map(|r| r.style.clone());
+        }
+    }
+    let mut entries = Vec::new();
+    let mut found: Vec<(usize, usize, f64, f64, TextStyle)> = Vec::new(); // level, page, y, x, style
+    for content in doc.introspector.query(&OutlineEntry::ELEM.select()).iter() {
+        let (Some(entry), Some(loc)) = (content.to_packed::<OutlineEntry>(), content.location()) else { continue };
+        let level = entry.level.get();
+        let target = entry.element.location().map(|l| doc.introspector.page(l).get() - 1);
+        entries.push(TocEntry { level, page: target.map(|p| page_label(doc, p)).unwrap_or_default() });
+        let pos = doc.introspector.position(loc);
+        let page = pos.page.get() - 1;
+        let (px, py) = (pos.point.x.to_pt(), pos.point.y.to_pt());
+        let near: Vec<&Run> = runs.iter().filter(|r| r.page == page && r.y >= py - 1.0 && r.y <= py + 30.0 && r.x >= px - 2.0).collect();
+        if let Some(min_y) = near.iter().map(|r| r.y).reduce(f64::min) {
+            if let Some(first) = near.iter().filter(|r| (r.y - min_y).abs() < 2.0).min_by(|a, b| a.x.partial_cmp(&b.x).unwrap()) {
+                found.push((level, page, first.y, first.x, first.style.clone()));
+            }
+        }
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    // Spacing: the usual distance between entries, and any extra above a level.
+    let mut gaps: Vec<(usize, f64)> = Vec::new();
+    for w in found.windows(2) {
+        if w[0].1 == w[1].1 && w[1].2 > w[0].2 {
+            gaps.push((w[1].0, w[1].2 - w[0].2));
+        }
+    }
+    let pitch = percentile(gaps.iter().map(|g| g.1).collect(), 0.1);
+    let max_level = found.iter().map(|f| f.0).max().unwrap_or(0);
+    let levels = (1..=max_level)
+        .map(|level| {
+            let of: Vec<&(usize, usize, f64, f64, TextStyle)> = found.iter().filter(|f| f.0 == level).collect();
+            let style = most_common(of.iter().map(|f| (&f.4, 1)))?;
+            let indent = median(of.iter().map(|f| f.3 - left).collect()).unwrap_or(0.0).max(0.0);
+            let above = match (median(gaps.iter().filter(|g| g.0 == level).map(|g| g.1).collect()), pitch) {
+                (Some(g), Some(p)) => (g - p).max(0.0),
+                _ => 0.0,
+            };
+            Some(TocLevel { style, indent, above })
+        })
+        .collect();
+    Some(Toc { title_center, title_style, levels, pitch, entries })
 }
 
 struct Run {
@@ -662,6 +767,13 @@ pub fn probe(doc: &PagedDocument) -> Probe {
             page > 0 && pos.point.y.to_pt() <= margins[0] + 24.0 && (broken[page - 1] || (ph - margins[2]) - lowest[page - 1] > body_height * 0.2)
         })
         .collect();
+    let heading_outlined: Vec<bool> = doc
+        .introspector
+        .query(&HeadingElem::ELEM.select())
+        .iter()
+        .map(|c| c.to_packed::<HeadingElem>().is_some_and(|h| h.outlined.get(styles)))
+        .collect();
+    let toc = table_of_contents(doc, &runs, margins[3], pw - margins[1] - margins[3]);
     let headings: Vec<Option<TextStyle>> = per_level.iter().map(|v| most_common(v.iter().map(|s| (s, 1)))).collect();
     let heading_page_break = at_top.iter().map(|(top, total)| *total >= 2 && *top as f64 >= *total as f64 * 0.6).collect();
 
@@ -708,6 +820,8 @@ pub fn probe(doc: &PagedDocument) -> Probe {
         headings,
         heading_page_break,
         heading_breaks,
+        heading_outlined,
+        toc,
         link_color,
         line_height,
         justify,

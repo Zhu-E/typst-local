@@ -143,16 +143,43 @@ export function buildReferenceDocx(defaultReference, probe, charStyles = []) {
   }
   const h1 = p.headings?.[0] || { font: body.font, size: bodyPt * 180, color: accent, bold: true };
   styles = putStyle(styles, 'Title', styleXml({ id: 'Title', name: 'Title', basedOn: 'Normal', next: 'BodyText', pPr: '<w:spacing w:before="0" w:after="240"/>', rPr: runProps({ ...h1, size: pt(h1) * 1.4 }) }));
+  // The table of contents looks like the document's own (measured by the
+  // probe): title alignment and style, and each level's style, indent and spacing.
+  const toc = p.toc;
+  const tocTitle = toc?.title_style || { ...h1 };
   styles = putStyle(
     styles,
     'TOCHeading',
-    styleXml({ id: 'TOCHeading', name: 'TOC Heading', basedOn: 'Normal', next: 'BodyText', pPr: `<w:keepNext/><w:spacing w:before="0" w:after="${twip(pt(h1) * 0.6)}"/>`, rPr: runProps({ ...h1, size: pt(h1) }) }),
+    styleXml({
+      id: 'TOCHeading',
+      name: 'TOC Heading',
+      basedOn: 'Normal',
+      next: 'BodyText',
+      pPr: `<w:keepNext/><w:spacing w:before="0" w:after="${twip(pt(tocTitle) * 0.4)}" w:line="240" w:lineRule="auto"/>${toc?.title_center ? '<w:jc w:val="center"/>' : '<w:jc w:val="left"/>'}`,
+      rPr: runProps({ ...tocTitle, size: pt(tocTitle) }),
+    }),
   );
-  for (let level = 1; level <= 3; level++) {
+  const tocLevels = Math.max(3, toc?.levels?.length || 0);
+  for (let level = 1; level <= Math.min(9, tocLevels); level++) {
+    const measured = toc?.levels?.[level - 1];
+    const spacing = measured
+      ? `<w:spacing w:before="${twip(measured.above)}" w:after="0"${toc.pitch ? ` w:line="${twip(toc.pitch)}" w:lineRule="exact"` : ''}/>`
+      : `<w:spacing w:before="${level === 1 ? 120 : 0}" w:after="40"/>`;
+    const indent = measured ? twip(measured.indent) : (level - 1) * 280;
+    const rPr = measured ? runProps({ ...measured.style, size: pt(measured.style), bold: !!measured.style.bold }) : level === 1 ? '<w:b/>' : '';
     styles = putStyle(
       styles,
       `TOC${level}`,
-      styleXml({ id: `TOC${level}`, name: `toc ${level}`, basedOn: 'Normal', next: 'Normal', pPr: `<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="${twip(textWidth)}"/></w:tabs><w:spacing w:before="${level === 1 ? 120 : 0}" w:after="40"/><w:ind w:left="${(level - 1) * 280}"/>`, rPr: level === 1 ? '<w:b/>' : '' }),
+      styleXml({ id: `TOC${level}`, name: `toc ${level}`, basedOn: 'Normal', next: 'Normal', pPr: `<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="${twip(textWidth)}"/></w:tabs>${spacing}<w:ind w:left="${indent}"/><w:jc w:val="left"/>`, rPr }),
+    );
+  }
+  // Headings the document leaves out of its outline stay out of the Word
+  // table of contents too (same look, but body-text outline level).
+  for (let level = 1; level <= 6; level++) {
+    styles = putStyle(
+      styles,
+      `Heading${level}Unlisted`,
+      styleXml({ id: `Heading${level}Unlisted`, name: `Heading ${level} (not in contents)`, basedOn: `Heading${level}`, next: 'BodyText', custom: true, pPr: '<w:outlineLvl w:val="9"/>' }),
     );
   }
 

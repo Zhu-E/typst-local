@@ -318,17 +318,42 @@ function codeBlockEdges(documentXml, style) {
 }
 
 /**
- * The document's own table of contents becomes a marker the Lua filter turns
- * into a Word TOC. Numbered lists that continue (<li value="2">) get a start
- * number pandoc understands.
+ * The document's own table of contents becomes the Word table of contents
+ * (built by the Lua filter): its entries, levels and page numbers as Typst
+ * laid them out, so it's right even before Word refreshes it. Numbered lists
+ * that continue (<li value="2">) get a start number pandoc understands.
  */
-function markTableOfContents(html) {
+function markTableOfContents(html, toc) {
   html = html.replace(/<ol>(\s*<li value="(\d+)")/g, '<ol start="$2">$1');
   html = html.replace(/<div data-tl-enum="([aAiI])">(\s*)<ol\b/g, '<div>$2<ol type="$1"');
   return html.replace(/<nav role="doc-toc">([\s\S]*?)<\/nav>/, (_, inner) => {
     const title = (/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/.exec(inner)?.[1] || '').replace(/<[^>]+>/g, '').trim();
-    return `<p>TYPSTLOCALTOC::${title}</p>`;
+    const links = [...inner.matchAll(/<a href="(#[^"]+)">([\s\S]*?)<\/a>/g)];
+    const known = toc?.entries?.length === links.length ? toc.entries : null;
+    const entries = links.map((m, i) => {
+      const before = inner.slice(0, m.index);
+      const depth = (before.match(/<ol\b/g) || []).length - (before.match(/<\/ol>/g) || []).length;
+      const level = Math.min(9, Math.max(1, known?.[i].level || depth));
+      const text = m[2].replace(/<[^>]+>/g, '').trim();
+      const page = known?.[i].page || '';
+      return `<div custom-style="toc ${level}"><p><a href="${m[1]}">${text}</a> TLTOCTAB${page}</p></div>`;
+    });
+    return `<p>TYPSTLOCALTOC::${title}</p>${entries.join('')}<p>TYPSTLOCALTOCEND</p>`;
   });
+}
+
+/**
+ * Table of contents entries: a tab (dot leader) before the page number, a
+ * little space on both sides of the dots (as Typst leaves), and plain (not
+ * link-styled) text.
+ */
+function tocEntries(documentXml) {
+  documentXml = documentXml.replace(/<w:r>(<w:rPr>(?:(?!<\/w:r>)[\s\S])*?<\/w:rPr>)?<w:t[^>]*>TLTOCTAB([^<]*)<\/w:t><\/w:r>/g, (_, rPr = '', page) =>
+    `<w:r>${rPr}<w:tab/></w:r>` + (page ? `<w:r>${rPr}<w:t xml:space="preserve"> ${page}</w:t></w:r>` : ''),
+  );
+  return documentXml.replace(/<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"\/>[\s\S]*?<\/w:sdt>/, (toc) =>
+    toc.replace(/<w:rStyle w:val="Hyperlink" ?\/>/g, ''),
+  );
 }
 
 const BOLD = new Set(['semibold', 'bold', 'extrabold', 'black']);
@@ -543,9 +568,17 @@ function headingBreaks(documentXml, style) {
     return documentXml.replace(/<w:p><w:pPr><w:pStyle w:val="Heading([1-6])" \/>/g, (m, level) => (levels[level - 1] ? m + '<w:pageBreakBefore/>' : m));
   }
   let i = 0;
-  // (The TOC brings its own page breaks.)
-  documentXml = documentXml.replace(heading, (m) => (breaks[i++] && !m.includes('TOCHeading') ? m + '<w:pageBreakBefore/>' : m));
-  return documentXml.replace(/<w:p><w:r><w:br w:type="page"\/><\/w:r><\/w:p>(\s*<w:p><w:pPr><w:pStyle w:val="Heading[1-6]" \/><w:pageBreakBefore\/>)/g, '$1');
+  // (The TOC brings its own page breaks.) Headings left out of the outline
+  // get the "not in contents" variant of their style.
+  const outlined = style.heading_outlined;
+  documentXml = documentXml.replace(heading, (m) => {
+    const k = i++;
+    if (m.includes('TOCHeading')) return m;
+    const unlisted = outlined?.length === breaks.length && outlined[k] === false;
+    const tag = unlisted ? m.replace(/w:val="Heading([1-6])"/, 'w:val="Heading$1Unlisted"') : m;
+    return breaks[k] ? tag + '<w:pageBreakBefore/>' : tag;
+  });
+  return documentXml.replace(/<w:p><w:r><w:br w:type="page"\/><\/w:r><\/w:p>(\s*<w:p><w:pPr><w:pStyle w:val="Heading[1-6](?:Unlisted)?" \/><w:pageBreakBefore\/>)/g, '$1');
 }
 
 /**
@@ -807,7 +840,7 @@ export async function htmlToDocx(html, style = null, fontFiles = []) {
   const reference = path.join(tmp, 'reference.docx');
   try {
     const placements = style?.placements || [];
-    const prepared = styleRuns(highlightCode(svgsToImages(sizeFigures(cleanFigures(sizeImages(markSpacing(pinPlacements(markTableOfContents(html), placements)), style?.image_sizes)), style?.figure_sizes))), style);
+    const prepared = styleRuns(highlightCode(svgsToImages(sizeFigures(cleanFigures(sizeImages(markSpacing(pinPlacements(markTableOfContents(html, style?.toc), placements)), style?.image_sizes)), style?.figure_sizes))), style);
     fs.writeFileSync(reference, buildReferenceDocx(await pandocDefaultReference(), style, prepared.charStyles));
     const tocBefore = !!style?.toc_page_break;
     const env = {
@@ -815,6 +848,7 @@ export async function htmlToDocx(html, style = null, fontFiles = []) {
       TYPST_LOCAL_TOC_BREAK_BEFORE: tocBefore ? '1' : '0',
       // A section after the contents starts its own page anyway when level-1 headings do.
       TYPST_LOCAL_TOC_BREAK_AFTER: tocBefore && !style?.heading_page_break?.[0] ? '1' : '0',
+      TYPST_LOCAL_TOC_LEVELS: String(Math.min(9, Math.max(1, ...(style?.toc?.entries || []).map((e) => e.level), style?.toc ? 1 : 3))),
     };
     const args = [
       '--from=html',
@@ -850,7 +884,7 @@ export async function htmlToDocx(html, style = null, fontFiles = []) {
       if (part[0] !== 'word/document.xml') continue;
       // pandoc copies each picture's source (a whole data URI) into its description.
       const xml = pictureRuns(part[1].toString('utf8').replace(/(<pic:cNvPr\b[^>]*?)\sdescr="data:[^"]*"/g, '$1'));
-      part[1] = Buffer.from(pageBackground(titleSection(tableBreaks(headingBreaks(codeBlockEdges(cellEdges(runWeights(paragraphAlignment(spacers(pinPictures(dropMarkerParagraphs(applyTableProps(applyLayoutTables(applyCellProps(xml), style), style)), placements))), prepared.charStyles)), style), style)), style), style));
+      part[1] = Buffer.from(tocEntries(pageBackground(titleSection(tableBreaks(headingBreaks(codeBlockEdges(cellEdges(runWeights(paragraphAlignment(spacers(pinPictures(dropMarkerParagraphs(applyTableProps(applyLayoutTables(applyCellProps(xml), style), style)), placements))), prepared.charStyles)), style), style)), style), style)));
     }
     linkPartRelationships(parts, 'word/footnotes.xml');
     embedFonts(parts, fontFiles);
