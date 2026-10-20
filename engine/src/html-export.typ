@@ -50,6 +50,18 @@
   (x: l.pt(), y: t.pt(), w: (w - l - r).pt(), h: (h - t - b).pt())
 }
 
+// Identifies an image the same way in the PDF and HTML compiles: its source
+// and size settings (paged-probe.typ / html-export.typ).
+#let tl-image-key(it) = (if type(it.source) == str { it.source } else { "bytes:" + str(it.source.len()) }) + "|" + repr(it.width) + "|" + repr(it.height)
+
+// Images say which one they are, so docx.js can give them their size in the
+// PDF (HTML export keeps relative sizes like `width: 70%` as CSS).
+#show image: it => context {
+  if target() != "html" { return it }
+  html.elem("span", attrs: ("data-tl-img": tl-image-key(it)))
+  it
+}
+
 // Drawings (cetz/lilaq charts, diagrams: a fixed-size block of placed shapes)
 // become pictures, since HTML export can't draw shapes.
 // Whether content contains any of these elements (looking a few levels deep).

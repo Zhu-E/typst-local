@@ -74,6 +74,16 @@
   it
 }
 
+// Identifies an image the same way in the PDF and HTML compiles: its source
+// and size settings (paged-probe.typ / html-export.typ).
+#let tl-image-key(it) = (if type(it.source) == str { it.source } else { "bytes:" + str(it.source.len()) }) + "|" + repr(it.width) + "|" + repr(it.height)
+
+// Every image is marked, so the Word export can give it its size on the page.
+#show image: it => {
+  metadata((tl-image: tl-image-key(it)))
+  it
+}
+
 // Image figures get markers too, so the Word export can size each picture
 // exactly as it came out on the page.
 #show figure.where(kind: image): it => {

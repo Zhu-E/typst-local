@@ -40,6 +40,25 @@ function cleanFigures(html) {
 }
 
 /**
+ * Images get the size they have in the PDF (measured by the probe; matched by
+ * their source and size settings, in order). HTML export only knows relative
+ * sizes like `width: 70%` as CSS, which pandoc can't resolve.
+ */
+function sizeImages(html, sizes = []) {
+  const queues = new Map();
+  for (const [key, w, h] of sizes) {
+    if (!queues.has(key)) queues.set(key, []);
+    queues.get(key).push([w, h]);
+  }
+  return html.replace(/<span data-tl-img="([^"]*)"><\/span>((?:\s*<\/?p>\s*)*)(<img\b[^>]*?)(\s*\/?>)/g, (whole, key, between, img, end) => {
+    const size = queues.get(unescapeAttr(key))?.shift();
+    if (!size || !(size[0] > 0)) return between + img + end;
+    const sized = img.replace(/\s(?:width|height|style)="[^"]*"/g, '');
+    return `${between}${sized} width="${size[0].toFixed(2)}pt" height="${size[1].toFixed(2)}pt"${end}`;
+  }).replace(/<p>\s*<span data-tl-img="[^"]*"><\/span>\s*<\/p>|<span data-tl-img="[^"]*"><\/span>/g, '');
+}
+
+/**
  * Each image figure's picture gets the size it has in the PDF (measured by
  * the probe, in order), as Typst's HTML export draws it at its natural size.
  */
@@ -788,7 +807,7 @@ export async function htmlToDocx(html, style = null, fontFiles = []) {
   const reference = path.join(tmp, 'reference.docx');
   try {
     const placements = style?.placements || [];
-    const prepared = styleRuns(highlightCode(svgsToImages(sizeFigures(cleanFigures(markSpacing(pinPlacements(markTableOfContents(html), placements))), style?.figure_sizes))), style);
+    const prepared = styleRuns(highlightCode(svgsToImages(sizeFigures(cleanFigures(sizeImages(markSpacing(pinPlacements(markTableOfContents(html), placements)), style?.image_sizes)), style?.figure_sizes))), style);
     fs.writeFileSync(reference, buildReferenceDocx(await pandocDefaultReference(), style, prepared.charStyles));
     const tocBefore = !!style?.toc_page_break;
     const env = {

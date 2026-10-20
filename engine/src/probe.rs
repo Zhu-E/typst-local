@@ -61,6 +61,8 @@ pub struct Probe {
     pub placements: Vec<Placement>,
     /// Each image figure's picture size on the page (w, h in pt), in order.
     pub figure_sizes: Vec<[f64; 2]>,
+    /// Every image's size on the page: (key, w, h in pt), in order.
+    pub image_sizes: Vec<(String, f64, f64)>,
 }
 
 #[derive(Serialize)]
@@ -212,6 +214,38 @@ fn figure_sizes(doc: &PagedDocument) -> Vec<[f64; 2]> {
     let (mut open, mut best) = (None, [0.0, 0.0]);
     for page in &doc.pages {
         walk(&page.frame, Transform::identity(), &mut open, &mut best, &mut out);
+    }
+    out
+}
+
+/// Every image's size on the page (key from paged-probe.typ, w, h in pt), in
+/// document order: the first picture drawn after each image's marker.
+fn image_sizes(doc: &PagedDocument) -> Vec<(String, f64, f64)> {
+    fn walk(frame: &Frame, ts: Transform, pending: &mut Option<String>, out: &mut Vec<(String, f64, f64)>) {
+        for (pos, item) in frame.items() {
+            let item_ts = ts.pre_concat(Transform::translate(pos.x, pos.y));
+            match item {
+                FrameItem::Group(group) => walk(&group.frame, item_ts.pre_concat(group.transform), pending, out),
+                FrameItem::Tag(Tag::Start(content, _)) => {
+                    let Some(meta) = content.to_packed::<MetadataElem>() else { continue };
+                    let Value::Dict(info) = &meta.value else { continue };
+                    if let Ok(Value::Str(key)) = info.get("tl-image") {
+                        *pending = Some(key.to_string());
+                    }
+                }
+                FrameItem::Image(_, size, _) => {
+                    if let Some(key) = pending.take() {
+                        out.push((key, size.x.to_pt() * item_ts.sx.get().abs(), size.y.to_pt() * item_ts.sy.get().abs()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut pending = None;
+    for page in &doc.pages {
+        walk(&page.frame, Transform::identity(), &mut pending, &mut out);
     }
     out
 }
@@ -685,5 +719,6 @@ pub fn probe(doc: &PagedDocument) -> Probe {
         page_fill,
         placements: placements(doc),
         figure_sizes: figure_sizes(doc),
+        image_sizes: image_sizes(doc),
     }
 }
