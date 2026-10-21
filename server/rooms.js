@@ -601,6 +601,57 @@ export class Room {
     }
   }
 
+  /**
+   * Images in the project that compiling the main file doesn't read. Compiles
+   * the current text first, so the answer reflects every edit made so far.
+   * Throws if the document doesn't compile, since the list would be incomplete.
+   */
+  async unusedImages() {
+    // Only the engine can report which files a compile read (it's the backend with jump()).
+    if (!compiler.jump) throw Object.assign(new Error('Finding unused images needs the incremental engine (npm run build:engine)'), { status: 501 });
+    const res = await this.request({ deps: true });
+    if (!res.deps) {
+      const first = res.diagnostics?.find((d) => d.severity === 'error');
+      throw Object.assign(
+        new Error(`${this.mainFile} has errors, so it can't tell which images are used yet. Fix them first${first ? ` (${first.path ? first.path + ': ' : ''}${first.message})` : ''}.`),
+        { status: 422 },
+      );
+    }
+    const used = new Set(res.deps);
+    const unused = [];
+    this.files.forEach((v, rel) => {
+      if (storage.isImagePath(rel) && !used.has(rel)) unused.push({ path: rel, size: v instanceof Y.Text ? Buffer.byteLength(v.toString()) : v?.size ?? 0 });
+    });
+    return { main: this.mainFile, images: unused.sort((a, b) => a.path.localeCompare(b.path)) };
+  }
+
+  /**
+   * Deletes the given images, but only those that are still unused right now
+   * (someone may have started using one since the list was shown). The state
+   * before is kept as a version, so this can be undone from History.
+   */
+  async deleteUnusedImages(paths, author) {
+    const { images } = await this.unusedImages();
+    const unused = new Set(images.map((i) => i.path));
+    const doomed = [...new Set(paths)].filter((p) => unused.has(p));
+    if (!doomed.length) return { deleted: [] };
+    this.changedSinceSnapshot = true; // always record the state before
+    this.snapshot('Before deleting unused images');
+    this.doc.transact(() => {
+      for (const rel of doomed) {
+        this.files.delete(rel);
+        // Keep the folder it was in, like deleting a single file does.
+        const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+        if (parent) this.folders.set(parent, true);
+      }
+    }, 'unused-images');
+    this.pendingAuthors.clear();
+    if (author) this.pendingAuthors.add(author);
+    this.changedSinceSnapshot = true;
+    this.snapshot(`Deleted ${doomed.length} unused image${doomed.length > 1 ? 's' : ''}`);
+    return { deleted: doomed };
+  }
+
   /** Source location for a click in the preview, or null if unsupported. */
   async jump(page, x, y) {
     if (!compiler.jump) return null;

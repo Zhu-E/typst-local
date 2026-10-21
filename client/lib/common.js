@@ -107,8 +107,11 @@ export function toast(text, kind = 'info', { duration = 2600 } = {}) {
   return hide;
 }
 
-/** Promise-based modal dialog. fields: [{name, label, value, placeholder, type, options}] */
-export function dialog({ title, message, fields = [], confirm = 'OK', danger = false, cancel = 'Cancel' }) {
+/**
+ * Promise-based modal dialog. fields: [{name, label, value, placeholder, type, options}];
+ * list: items (text or nodes) shown in a scrollable box under the message.
+ */
+export function dialog({ title, message, list, fields = [], confirm = 'OK', danger = false, cancel = 'Cancel' }) {
   return new Promise((resolve) => {
     const inputs = {};
     const close = (value) => {
@@ -134,6 +137,7 @@ export function dialog({ title, message, fields = [], confirm = 'OK', danger = f
       },
       h('h2', null, title),
       message && h('p.dialog-message', null, message),
+      list?.length ? h('ul.dialog-list', null, list.map((item) => h('li', null, item))) : null,
       fields.map((f) => {
         let input;
         if (f.options) {

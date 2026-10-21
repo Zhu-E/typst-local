@@ -134,7 +134,7 @@ class EngineBackend extends EventEmitter {
   finish(request, msg) {
     const st = this.state(request.project);
     addFontHints(msg.diagnostics, st.fonts);
-    const out = { status: msg.status, diagnostics: msg.diagnostics, pages: msg.numPages, ms: msg.ms, outline: msg.outline, html: msg.html, style: msg.style };
+    const out = { status: msg.status, diagnostics: msg.diagnostics, pages: msg.numPages, ms: msg.ms, outline: msg.outline, html: msg.html, style: msg.style, deps: msg.deps };
     if (request.pdfPath) {
       if (msg.pdf) out.pdf = fs.readFileSync(request.pdfPath);
       fs.rmSync(request.pdfPath, { force: true });
@@ -173,6 +173,7 @@ class EngineBackend extends EventEmitter {
       fonts: msg.fonts,
       full: !!msg.full,
       html: !!msg.html,
+      deps: !!msg.deps,
     };
     if (msg.pdf) {
       request.pdfPath = path.join(os.tmpdir(), `typst-local-${process.pid}-${id}.pdf`);

@@ -1120,8 +1120,51 @@ for (const id of ['upload-input', 'upload-folder-input']) {
   };
 }
 
+// ---- unused images ----
+
+/** Asks the server which images compiling the main file doesn't read, and offers to delete them. */
+async function deleteUnusedImages() {
+  const done = toast('Checking which images the document uses…', 'info', { duration: null });
+  let found;
+  try {
+    found = await api('GET', `/api/projects/${projectId}/unused-images`);
+  } catch (e) {
+    done();
+    return toast(e.message, 'error', { duration: 6000 });
+  }
+  done();
+  const { main, images } = found;
+  if (!images.length) return toast(`Every image in the project is used by ${main}`);
+  const n = images.length;
+  const total = formatSize(images.reduce((sum, i) => sum + i.size, 0));
+  const ok = await dialog({
+    title: `Delete ${n} unused image${n > 1 ? 's' : ''}?`,
+    message:
+      `${n > 1 ? "These aren't" : "This isn't"} used anywhere in ${main} (${total} in total). ` +
+      `${n > 1 ? 'They' : 'It'} will be deleted for everyone; you can undo this from History.`,
+    list: images.map((i) => [h('span', { title: i.path }, i.path), h('span.dialog-list-meta', null, formatSize(i.size))]),
+    confirm: n > 1 ? `Delete ${n} images` : 'Delete image',
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    const { deleted } = await api('POST', `/api/projects/${projectId}/unused-images/delete`, {
+      paths: images.map((i) => i.path),
+      author: user.name,
+    });
+    const kept = n - deleted.length;
+    toast(
+      `Deleted ${deleted.length} image${deleted.length === 1 ? '' : 's'}` +
+        (kept ? `; kept ${kept} that ${kept > 1 ? 'are' : 'is'} in use now` : ''),
+    );
+  } catch (e) {
+    toast(e.message, 'error', { duration: 6000 });
+  }
+}
+
 $('new-file-btn').onclick = () => newFile();
 $('new-folder-btn').onclick = () => newFolder();
+$('unused-images-btn').onclick = () => deleteUnusedImages();
 $('upload-btn').onclick = (e) =>
   popupMenu(e.currentTarget, [
     { label: 'Upload files', onclick: () => pickUpload() },

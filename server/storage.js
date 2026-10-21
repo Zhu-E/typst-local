@@ -130,3 +130,7 @@ const TEXT_EXT = new Set([
 export const isTextPath = (p) => TEXT_EXT.has(p.split('.').pop().toLowerCase());
 
 export const isFontPath = (p) => /\.(ttf|otf|ttc|otc)$/i.test(p);
+
+// PDFs are left out on purpose: Typst can place them as images, but a PDF in a
+// project is just as often a reference document someone wants to keep.
+export const isImagePath = (p) => /\.(png|jpe?g|gif|webp|svg|bmp|tiff?|avif|heic)$/i.test(p);

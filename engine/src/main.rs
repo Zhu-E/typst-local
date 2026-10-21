@@ -82,6 +82,9 @@ struct CompileRequest {
     /// Export as HTML (for conversion to other formats) instead of pages.
     #[serde(default)]
     html: bool,
+    /// Only report which project files the document reads (no pages).
+    #[serde(default)]
+    deps: bool,
 }
 
 #[derive(Deserialize)]
@@ -108,6 +111,9 @@ struct Response {
     /// Every heading in the document, in order.
     #[serde(skip_serializing_if = "Option::is_none")]
     outline: Option<Vec<Heading>>,
+    /// Project files the compile read (for `deps` requests).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deps: Option<Vec<String>>,
     pdf: bool,
     ms: u64,
 }
@@ -203,6 +209,10 @@ struct Project {
     rendered: HashSet<u128>,
     /// The last successfully compiled document, for click-to-source.
     document: Option<PagedDocument>,
+    /// Project files read since the last compile started. Typst re-checks the
+    /// files a cached result depends on, so this is complete even for
+    /// recompiles that reuse almost everything.
+    accessed: Mutex<HashSet<FileId>>,
     today: Datetime,
 }
 
@@ -228,6 +238,7 @@ impl Project {
             package_files: Mutex::new(HashMap::new()),
             rendered: HashSet::new(),
             document: None,
+            accessed: Mutex::new(HashSet::new()),
             today: Datetime::from_ymd(1970, 1, 1).unwrap(),
         };
         project.set_fonts(Vec::new());
@@ -320,6 +331,7 @@ impl World for Project {
                 })
                 .clone();
         }
+        self.accessed.lock().unwrap().insert(id);
         match self.files.get(&id) {
             Some(Slot::Text { source, .. }) => Ok(source.clone()),
             Some(Slot::Binary { bytes, .. }) => {
@@ -335,6 +347,7 @@ impl World for Project {
             let mut cache = self.package_files.lock().unwrap();
             return cache.entry(id).or_insert_with(|| self.read_package(id)).clone();
         }
+        self.accessed.lock().unwrap().insert(id);
         match self.files.get(&id) {
             Some(Slot::Text { bytes, .. }) | Some(Slot::Binary { bytes, .. }) => Ok(bytes.clone()),
             None => Err(not_found(id)),
@@ -406,6 +419,7 @@ fn error_response(id: u64, message: String) -> Response {
         num_pages: None,
         outline: None,
         html: None, style: None,
+        deps: None,
         pdf: false,
         ms: 0,
     }
@@ -595,11 +609,11 @@ fn export_html(project: &mut Project, id: u64, main: &str, start: Instant) -> Re
     project.files.remove(&probe_wrapper);
     let ms = start.elapsed().as_millis() as u64;
     match html {
-        Ok(html) => Response { id, status: "ok", diagnostics: warnings, pages: None, num_pages: None, outline: None, html: Some(html), style, pdf: false, ms },
+        Ok(html) => Response { id, status: "ok", diagnostics: warnings, pages: None, num_pages: None, outline: None, html: Some(html), style, deps: None, pdf: false, ms },
         Err(errors) => {
             let mut all: Vec<Diagnostic> = errors.iter().map(|d| convert_diagnostic(project, d)).collect();
             all.extend(warnings);
-            Response { id, status: "error", diagnostics: all, pages: None, num_pages: None, outline: None, html: None, style: None, pdf: false, ms }
+            Response { id, status: "error", diagnostics: all, pages: None, num_pages: None, outline: None, html: None, style: None, deps: None, pdf: false, ms }
         }
     }
 }
@@ -633,6 +647,7 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
         return export_html(project, req.id, &req.main, start);
     }
 
+    project.accessed.lock().unwrap().clear();
     let result = typst::compile::<PagedDocument>(&*project);
     let mut diagnostics: Vec<Diagnostic> = result.warnings.iter().map(|d| convert_diagnostic(project, d)).collect();
     let doc = match result.output {
@@ -648,12 +663,26 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
                 num_pages: None,
                 outline: None,
                 html: None, style: None,
+                deps: None,
                 pdf: false,
                 ms: start.elapsed().as_millis() as u64,
             };
         }
     };
     let status = if diagnostics.is_empty() { "ok" } else { "warning" };
+
+    if req.deps {
+        let mut deps: Vec<String> = project
+            .accessed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|id| id.vpath().as_rootless_path().to_string_lossy().replace('\\', "/"))
+            .collect();
+        deps.sort();
+        let ms = start.elapsed().as_millis() as u64;
+        return Response { id: req.id, status, diagnostics, pages: None, num_pages: Some(doc.pages.len()), outline: None, html: None, style: None, deps: Some(deps), pdf: false, ms };
+    }
 
     if let Some(out) = req.pdf {
         let written = typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default())
@@ -664,10 +693,10 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
                 })
             });
         return match written {
-            Ok(()) => Response { id: req.id, status, diagnostics, pages: None, num_pages: Some(doc.pages.len()), outline: None, html: None, style: None, pdf: true, ms: start.elapsed().as_millis() as u64 },
+            Ok(()) => Response { id: req.id, status, diagnostics, pages: None, num_pages: Some(doc.pages.len()), outline: None, html: None, style: None, deps: None, pdf: true, ms: start.elapsed().as_millis() as u64 },
             Err(mut errs) => {
                 errs.append(&mut diagnostics);
-                Response { id: req.id, status: "error", diagnostics: errs, pages: None, num_pages: None, outline: None, html: None, style: None, pdf: false, ms: start.elapsed().as_millis() as u64 }
+                Response { id: req.id, status: "error", diagnostics: errs, pages: None, num_pages: None, outline: None, html: None, style: None, deps: None, pdf: false, ms: start.elapsed().as_millis() as u64 }
             }
         };
     }
@@ -707,6 +736,7 @@ fn compile(project: &mut Project, req: CompileRequest) -> Response {
         num_pages: Some(num_pages),
         outline: Some(outline),
         html: None, style: None,
+        deps: None,
         pdf: false,
         ms: start.elapsed().as_millis() as u64,
     }

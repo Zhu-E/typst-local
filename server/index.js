@@ -224,6 +224,25 @@ api.post('/projects/:id/cursor', express.json(), loadRoom, async (req, res) => {
   res.json(result);
 });
 
+// Images in the project that the document doesn't use.
+api.get('/projects/:id/unused-images', loadRoom, async (req, res) => {
+  try {
+    res.json(await req.room.unusedImages());
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+api.post('/projects/:id/unused-images/delete', express.json(), loadRoom, async (req, res) => {
+  const paths = Array.isArray(req.body?.paths) ? req.body.paths.map(storage.normalizePath).filter(Boolean) : [];
+  if (!paths.length) return res.status(400).json({ error: 'paths are required' });
+  try {
+    res.json(await req.room.deleteUnusedImages(paths, cleanAuthor(req.body?.author)));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
 // Images in the live preview, handed out by content hash so browsers cache them.
 api.get('/projects/:id/img/:hash', loadRoom, (req, res) => {
   const img = req.room.images.get(req.params.hash);
