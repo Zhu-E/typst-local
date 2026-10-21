@@ -205,6 +205,8 @@ struct Project {
     files: HashMap<FileId, Slot>,
     package_sources: Mutex<HashMap<FileId, FileResult<Source>>>,
     package_files: Mutex<HashMap<FileId, FileResult<Bytes>>>,
+    /// Generated sources for wildcard paths like `chapters/*` (see `glob_source`).
+    glob_sources: Mutex<HashMap<FileId, Source>>,
     /// Pages the caller already has, by content hash.
     rendered: HashSet<u128>,
     /// The last successfully compiled document, for click-to-source.
@@ -236,6 +238,7 @@ impl Project {
             files: HashMap::new(),
             package_sources: Mutex::new(HashMap::new()),
             package_files: Mutex::new(HashMap::new()),
+            glob_sources: Mutex::new(HashMap::new()),
             rendered: HashSet::new(),
             document: None,
             accessed: Mutex::new(HashSet::new()),
@@ -298,6 +301,108 @@ impl Project {
         let path = self.package_path(id)?;
         std::fs::read(&path).map(Bytes::new).map_err(|e| FileError::from_io(e, &path))
     }
+
+    /// Typst can't list folders, so `#include "chapters/*"` is handled here: a
+    /// missing path whose last segment has `*` or `?` becomes a generated source
+    /// that includes every matching .typ file in that folder, in natural order
+    /// (ch2 before ch10). The source sits in the folder itself, so the files'
+    /// own relative paths keep working. None if `id` isn't such a pattern.
+    fn glob_source(&self, id: FileId) -> Option<FileResult<Source>> {
+        let path = id.vpath().as_rootless_path().to_string_lossy().replace('\\', "/");
+        let (dir, pattern) = path.rsplit_once('/').unwrap_or(("", &path));
+        if !pattern.contains(['*', '?']) || dir.contains(['*', '?']) {
+            return None;
+        }
+        let mut names: Vec<String> = self
+            .files
+            .keys()
+            .filter_map(|file| {
+                // `#include "*"` next to the main file shouldn't include the main file itself.
+                if *file == self.main {
+                    return None;
+                }
+                let file = file.vpath().as_rootless_path().to_string_lossy().replace('\\', "/");
+                let (parent, name) = file.rsplit_once('/').unwrap_or(("", &file));
+                let wanted = parent == dir && name.ends_with(".typ") && !name.starts_with("__typst_local_") && wildcard(pattern, name);
+                wanted.then(|| name.to_string())
+            })
+            .collect();
+        if names.is_empty() {
+            return Some(Err(FileError::Other(Some(format!("no .typ files match \"{path}\"").into()))));
+        }
+        names.sort_by(|a, b| natural_cmp(a, b));
+        let text: String = names.iter().map(|n| format!("#include \"{}\"\n", n.replace('\\', "\\\\").replace('"', "\\\""))).collect();
+        // Reuse the parsed source while the folder's contents stay the same.
+        let mut cache = self.glob_sources.lock().unwrap();
+        if let Some(source) = cache.get(&id).filter(|s| s.text() == text) {
+            return Some(Ok(source.clone()));
+        }
+        let source = Source::new(id, text);
+        cache.insert(id, source.clone());
+        Some(Ok(source))
+    }
+}
+
+/// Shell-style match of one path segment: `*` is any run of characters, `?` any one.
+fn wildcard(pattern: &str, name: &str) -> bool {
+    let (p, n): (Vec<char>, Vec<char>) = (pattern.chars().collect(), name.chars().collect());
+    let (mut pi, mut ni) = (0, 0);
+    let mut star: Option<(usize, usize)> = None; // (pattern index after the *, name index it resumes at)
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some((pi + 1, ni));
+            pi += 1;
+        } else if let Some((after, at)) = star {
+            // Let the last * swallow one more character and try again.
+            star = Some((after, at + 1));
+            pi = after;
+            ni = at + 1;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == '*')
+}
+
+/// Orders names with numbers by value, so "ch2.typ" comes before "ch10.typ".
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    use std::iter::Peekable;
+    use std::str::Chars;
+    fn number(it: &mut Peekable<Chars>) -> String {
+        let mut digits = String::new();
+        while let Some(c) = it.peek().copied().filter(char::is_ascii_digit) {
+            digits.push(c);
+            it.next();
+        }
+        digits
+    }
+    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let (m, n) = (number(&mut a), number(&mut b));
+                let (m, n) = (m.trim_start_matches('0'), n.trim_start_matches('0'));
+                let order = m.len().cmp(&n.len()).then_with(|| m.cmp(n));
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            (Some(x), Some(y)) => {
+                if x != y {
+                    return x.cmp(&y);
+                }
+                a.next();
+                b.next();
+            }
+        }
+    }
 }
 
 impl typst_ide::IdeWorld for Project {
@@ -338,7 +443,7 @@ impl World for Project {
                 let text = std::str::from_utf8(bytes.as_slice()).map_err(|_| FileError::InvalidUtf8)?;
                 Ok(Source::new(id, text.into()))
             }
-            None => Err(not_found(id)),
+            None => self.glob_source(id).unwrap_or_else(|| Err(not_found(id))),
         }
     }
 
